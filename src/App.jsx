@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
   ResponsiveContainer, 
   ComposedChart, 
+  LineChart,
   Line,
   Bar, 
   XAxis, 
@@ -11,7 +12,42 @@ import {
   Legend,
   ReferenceLine
 } from 'recharts';
-import { Activity, Radio, Wifi, WifiOff, Loader2 } from 'lucide-react';
+import { Activity, Radio, Wifi, WifiOff, Loader2, BarChart2, TrendingUp } from 'lucide-react';
+
+// This custom component draws the Wick and Body of the candlestick
+const CustomCandlestick = (props) => {
+  const { x, y, width, height, payload } = props;
+  const isUp = payload.close >= payload.open;
+  const color = isUp ? '#10b981' : '#ef4444'; // Emerald for Up, Rose for Down
+
+  // Calculate the total range (High to Low)
+  const range = payload.high - payload.low;
+  
+  // If there's no movement, just draw a flat line
+  if (range === 0) {
+    return <line x1={x} y1={y} x2={x + width} y2={y} stroke={color} strokeWidth={2} />;
+  }
+
+  // Calculate the ratio of pixels per dollar
+  const ratio = height / range;
+  
+  // Calculate exact Y coordinates for the Open and Close of the body
+  const openY = y + (payload.high - payload.open) * ratio;
+  const closeY = y + (payload.high - payload.close) * ratio;
+
+  const topY = Math.min(openY, closeY);
+  const bottomY = Math.max(openY, closeY);
+  const bodyHeight = Math.max(bottomY - topY, 2); // Ensure body is at least 2px tall so it's visible
+
+  return (
+    <g>
+      {/* Wick (High to Low) */}
+      <line x1={x + width / 2} y1={y} x2={x + width / 2} y2={y + height} stroke={color} strokeWidth={1} />
+      {/* Body (Open to Close) */}
+      <rect x={x + width * 0.2} y={topY} width={width * 0.6} height={bodyHeight} fill={color} stroke={color} />
+    </g>
+  );
+};
 
 // Calculates the Simple Moving Average (SMA)
 const calculateSMA = (data, period) => {
@@ -50,6 +86,37 @@ const calculateBollingerBands = (data, period = 20, multiplier = 2) => {
   });
 };
 
+// Calculates the Relative Strength Index (RSI)
+const calculateRSI = (data, period = 14) => {
+  let avgGain = 0;
+  let avgLoss = 0;
+
+  return data.map((point, index, arr) => {
+    if (index === 0) return { ...point, rsi: null };
+    
+    const diff = point.price - arr[index - 1].price;
+    const gain = Math.max(0, diff);
+    const loss = Math.max(0, -diff);
+
+    if (index < period) {
+      avgGain += gain;
+      avgLoss += loss;
+      return { ...point, rsi: null };
+    } else if (index === period) {
+      avgGain /= period;
+      avgLoss /= period;
+    } else {
+      avgGain = (avgGain * (period - 1) + gain) / period;
+      avgLoss = (avgLoss * (period - 1) + loss) / period;
+    }
+
+    const rs = avgGain / (avgLoss === 0 ? 1 : avgLoss);
+    const rsi = 100 - (100 / (1 + rs));
+    
+    return { ...point, rsi };
+  });
+};
+
 const TIMEFRAMES = {
   'LIVE': { label: 'Live', interval: '1m', limit: 100 },
   '1M': { label: '1M', interval: '4h', limit: 180 },
@@ -59,7 +126,7 @@ const TIMEFRAMES = {
 };
 
 const COIN_CONFIG = {
-  'BTCUSDT': { label: 'BTC', name: 'Bitcoin' }, 
+  'BTCUSDT': { label: 'BTC', name: 'Bitcoin' },
   'ETHUSDT': { label: 'ETH', name: 'Ethereum' },
   'SOLUSDT': { label: 'SOL', name: 'Solana' }
 };
@@ -75,6 +142,7 @@ const formatTime = (timestamp, tf) => {
 export default function LiveCryptoDashboard() {
   const [selectedPair, setSelectedPair] = useState('BTCUSDT');
   const [selectedTimeframe, setSelectedTimeframe] = useState('LIVE');
+  const [chartType, setChartType] = useState('candle'); // 'line' or 'candle'
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [wsStatus, setWsStatus] = useState('connecting'); // connecting, connected, error, disconnected
@@ -85,6 +153,7 @@ export default function LiveCryptoDashboard() {
   const [showFib, setShowFib] = useState(false);
   const [showBollinger, setShowBollinger] = useState(false);
   const [showVolume, setShowVolume] = useState(true);
+  const [showRSI, setShowRSI] = useState(false);
   
   const smaPeriod = 14;
   const emaPeriod = 9;
@@ -94,12 +163,11 @@ export default function LiveCryptoDashboard() {
     let isMounted = true;
     const tfConfig = TIMEFRAMES[selectedTimeframe];
 
-    // Robust fetch function testing multiple Binance endpoints to bypass CORS/Region blocks
     const fetchWithFallback = async (endpoint) => {
       const endpoints = [
-        'https://data-api.binance.vision', // Official global data fallback (most permissive)
-        'https://api.binance.com',         // Primary standard API
-        'https://api.binance.us'           // US Region fallback
+        'https://data-api.binance.vision', 
+        'https://api.binance.com',         
+        'https://api.binance.us'           
       ];
       
       for (let base of endpoints) {
@@ -107,7 +175,7 @@ export default function LiveCryptoDashboard() {
           const res = await fetch(`${base}${endpoint}`);
           if (res.ok) return res;
         } catch (err) {
-          // Ignore the error and try the next endpoint in the array
+          // Ignore and try next
         }
       }
       throw new Error('NetworkError: All API fallback endpoints failed.');
@@ -116,26 +184,28 @@ export default function LiveCryptoDashboard() {
     const fetchHistoricalAndStartPolling = async () => {
       try {
         setLoading(true);
-        
-        // 1. Fetch historical klines
         const res = await fetchWithFallback(`/api/v3/klines?symbol=${selectedPair}&interval=${tfConfig.interval}&limit=${tfConfig.limit}`);
         const json = await res.json();
         
         if (!isMounted) return;
 
-        // Map Binance response [Open time, Open, High, Low, Close, Volume...] to our format
+        // Map Binance response to include OHLC (Open, High, Low, Close)
         const historicalData = json.map(d => ({
           timestamp: d[0],
           time: formatTime(d[0], selectedTimeframe),
-          price: parseFloat(d[4]), // Close price
-          volume: parseFloat(d[5]), // Volume
+          open: parseFloat(d[1]),
+          high: parseFloat(d[2]),
+          low: parseFloat(d[3]),
+          close: parseFloat(d[4]),
+          price: parseFloat(d[4]), // Maintain 'price' for backwards compatibility with moving averages
+          volume: parseFloat(d[5]), 
+          candleRange: [parseFloat(d[3]), parseFloat(d[2])] // [low, high] required for the Recharts Bar boundary
         }));
         
         setData(historicalData);
         setLoading(false);
         setWsStatus('connected');
 
-        // 2. Poll the REST API for the latest candlestick data (includes volume)
         pollInterval = setInterval(async () => {
           try {
             const priceRes = await fetchWithFallback(`/api/v3/klines?symbol=${selectedPair}&interval=${tfConfig.interval}&limit=1`);
@@ -145,26 +215,40 @@ export default function LiveCryptoDashboard() {
 
             const latestKline = priceData[0];
             const klineStartTime = latestKline[0];
-            const currentPrice = parseFloat(latestKline[4]);
+            const currentOpen = parseFloat(latestKline[1]);
+            const currentHigh = parseFloat(latestKline[2]);
+            const currentLow = parseFloat(latestKline[3]);
+            const currentClose = parseFloat(latestKline[4]);
             const currentVolume = parseFloat(latestKline[5]);
 
             setData(prevData => {
               if (prevData.length === 0) return prevData;
-              
               const lastPoint = prevData[prevData.length - 1];
 
               if (klineStartTime > lastPoint.timestamp) {
-                // Time crossed into a new interval -> Add new data point, drop oldest
                 const newPoint = {
                   timestamp: klineStartTime,
                   time: formatTime(klineStartTime, selectedTimeframe),
-                  price: currentPrice,
-                  volume: currentVolume
+                  open: currentOpen,
+                  high: currentHigh,
+                  low: currentLow,
+                  close: currentClose,
+                  price: currentClose,
+                  volume: currentVolume,
+                  candleRange: [currentLow, currentHigh]
                 };
                 return [...prevData.slice(1), newPoint];
               } else {
-                // Still in the current interval -> Update the close price and volume dynamically
-                const updatedLastPoint = { ...lastPoint, price: currentPrice, volume: currentVolume };
+                const updatedLastPoint = { 
+                  ...lastPoint, 
+                  open: currentOpen,
+                  high: currentHigh,
+                  low: currentLow,
+                  close: currentClose,
+                  price: currentClose, 
+                  volume: currentVolume,
+                  candleRange: [currentLow, currentHigh]
+                };
                 return [...prevData.slice(0, prevData.length - 1), updatedLastPoint];
               }
             });
@@ -173,7 +257,7 @@ export default function LiveCryptoDashboard() {
             console.error("Polling error:", pollError.message);
             if (isMounted) setWsStatus('error');
           }
-        }, 3000); // Poll every 3 seconds
+        }, 3000); 
 
       } catch (error) {
         console.error("Failed to fetch initial data:", error.message);
@@ -186,7 +270,6 @@ export default function LiveCryptoDashboard() {
 
     fetchHistoricalAndStartPolling();
 
-    // Cleanup interval on unmount or when selectedPair / timeframe changes
     return () => {
       isMounted = false;
       if (pollInterval) {
@@ -195,16 +278,17 @@ export default function LiveCryptoDashboard() {
     };
   }, [selectedPair, selectedTimeframe]);
 
-  // Process the chart data to include our MAs
+  // Process the chart data to include our MAs and RSI
   const chartData = useMemo(() => {
     if (data.length === 0) return [];
     let processed = calculateSMA(data, smaPeriod);
     processed = calculateEMA(processed, emaPeriod);
     processed = calculateBollingerBands(processed, 20);
+    processed = calculateRSI(processed, 14);
     return processed;
   }, [data, smaPeriod, emaPeriod]);
 
-  // Calculate dynamic Fibonacci Retracement levels based on visible High/Low
+  // Calculate dynamic Fibonacci Retracement levels
   const fibLevels = useMemo(() => {
     if (!showFib || data.length === 0) return null;
     const prices = data.map(d => d.price);
@@ -212,7 +296,6 @@ export default function LiveCryptoDashboard() {
     const low = Math.min(...prices);
     const diff = high - low;
     
-    // Avoid division by zero or completely flat charts
     if (diff === 0) return null;
 
     return {
@@ -271,6 +354,30 @@ export default function LiveCryptoDashboard() {
                 ))}
               </div>
 
+              {/* Chart Type Selector */}
+              <div className="flex bg-slate-900/80 rounded-lg p-1 border border-slate-700/50 shadow-inner">
+                <button
+                  onClick={() => setChartType('line')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-all duration-200 ${
+                    chartType === 'line' 
+                      ? 'bg-slate-700 text-white shadow-sm' 
+                      : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'
+                  }`}
+                >
+                  <TrendingUp size={14} /> Line
+                </button>
+                <button
+                  onClick={() => setChartType('candle')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-all duration-200 ${
+                    chartType === 'candle' 
+                      ? 'bg-slate-700 text-white shadow-sm' 
+                      : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'
+                  }`}
+                >
+                  <BarChart2 size={14} /> Candles
+                </button>
+              </div>
+
               <span className="px-2.5 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-300 items-center gap-1.5 shadow-sm hidden lg:flex">
                 <Radio size={12} className="text-blue-400" /> Binance
               </span>
@@ -289,7 +396,7 @@ export default function LiveCryptoDashboard() {
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           
           {/* Main Chart Area */}
-          <div className="lg:col-span-3 bg-slate-900 rounded-xl p-2 sm:p-4 shadow-xl border border-slate-800 relative">
+          <div className="lg:col-span-3 bg-slate-900 rounded-xl p-2 sm:p-4 shadow-xl border border-slate-800 relative flex flex-col transition-all duration-300">
             
             {loading ? (
               <div className="w-full h-[500px] flex flex-col items-center justify-center text-slate-500">
@@ -297,104 +404,167 @@ export default function LiveCryptoDashboard() {
                 <p>Fetching historical data...</p>
               </div>
             ) : (
-              <div className="w-full h-[500px] relative">
-                {/* Background Coin Watermark */}
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-5 z-0">
-                  <span className="text-[10rem] font-bold tracking-tighter text-slate-200">
-                    {COIN_CONFIG[selectedPair].label}
-                  </span>
+              <>
+                {/* Main Price Chart */}
+                <div className={`w-full relative transition-all duration-300 ${showRSI ? 'h-[350px]' : 'h-[500px]'}`}>
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.03] z-0">
+                    <span className="text-[10rem] font-bold tracking-tighter text-white">
+                      {COIN_CONFIG[selectedPair].label}
+                    </span>
+                  </div>
+                  
+                  <ResponsiveContainer width="100%" height="100%" className="relative z-10">
+                    <ComposedChart data={chartData} syncId="cryptoSync" margin={{ top: 20, right: 10, left: 20, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                      
+                      <XAxis 
+                        dataKey="time" 
+                        stroke="#e2e8f0" 
+                        tick={showRSI ? false : { fill: '#e2e8f0', fontSize: 13, fontWeight: 600 }}
+                        tickMargin={12}
+                        minTickGap={30}
+                        axisLine={{ stroke: '#334155' }}
+                      />
+                      
+                      <YAxis 
+                        yAxisId="price"
+                        domain={['auto', 'auto']} 
+                        stroke="#e2e8f0" 
+                        tick={{ fill: '#e2e8f0', fontSize: 13, fontWeight: 600 }}
+                        tickFormatter={(val) => `$${val.toLocaleString()}`}
+                        width={80}
+                        axisLine={{ stroke: '#334155' }}
+                        tickLine={{ stroke: '#334155' }}
+                      />
+
+                      <YAxis 
+                        yAxisId="volume" 
+                        orientation="right" 
+                        domain={[0, dataMax => dataMax * 4]} 
+                        hide={true} 
+                      />
+
+                      {/* Tooltip Formatter setup to handle both OHLC Candles and standard Line price */}
+                      <Tooltip 
+                        contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', color: '#f8fafc', borderRadius: '0.5rem', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.5)' }}
+                        itemStyle={{ color: '#e2e8f0', fontSize: '14px', padding: '2px 0' }}
+                        labelStyle={{ color: '#94a3b8', marginBottom: '8px', fontSize: '13px', fontWeight: 600 }}
+                        formatter={(value, name, props) => {
+                          if (name === 'Volume') return [Number(value).toLocaleString(), name];
+                          if (name === 'Candles' || name === 'candleRange') {
+                            const { open, high, low, close } = props.payload;
+                            return [`O: ${open.toLocaleString()} | H: ${high.toLocaleString()} | L: ${low.toLocaleString()} | C: ${close.toLocaleString()}`, 'OHLC'];
+                          }
+                          if (name === 'RSI') return []; 
+                          return [`$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, name];
+                        }}
+                      />
+                      <Legend wrapperStyle={{ paddingTop: '15px' }} iconType="circle" />
+                      
+                      {showFib && fibLevels && (
+                        <>
+                          <ReferenceLine yAxisId="price" y={fibLevels[0]} stroke="#ef4444" strokeDasharray="3 3" strokeOpacity={0.6} label={{ position: 'insideTopLeft', value: '0.0%', fill: '#ef4444', fontSize: 11, fontWeight: 600 }} />
+                          <ReferenceLine yAxisId="price" y={fibLevels[0.236]} stroke="#f97316" strokeDasharray="3 3" strokeOpacity={0.6} label={{ position: 'insideTopLeft', value: '23.6%', fill: '#f97316', fontSize: 11, fontWeight: 600 }} />
+                          <ReferenceLine yAxisId="price" y={fibLevels[0.382]} stroke="#eab308" strokeDasharray="3 3" strokeOpacity={0.6} label={{ position: 'insideTopLeft', value: '38.2%', fill: '#eab308', fontSize: 11, fontWeight: 600 }} />
+                          <ReferenceLine yAxisId="price" y={fibLevels[0.5]} stroke="#22c55e" strokeDasharray="3 3" strokeOpacity={0.6} label={{ position: 'insideTopLeft', value: '50.0%', fill: '#22c55e', fontSize: 11, fontWeight: 600 }} />
+                          <ReferenceLine yAxisId="price" y={fibLevels[0.618]} stroke="#3b82f6" strokeDasharray="3 3" strokeOpacity={0.6} label={{ position: 'insideTopLeft', value: '61.8%', fill: '#3b82f6', fontSize: 11, fontWeight: 600 }} />
+                          <ReferenceLine yAxisId="price" y={fibLevels[1]} stroke="#a855f7" strokeDasharray="3 3" strokeOpacity={0.6} label={{ position: 'insideTopLeft', value: '100.0%', fill: '#a855f7', fontSize: 11, fontWeight: 600 }} />
+                        </>
+                      )}
+
+                      {showVolume && (
+                        <Bar yAxisId="volume" dataKey="volume" fill="#3b82f6" opacity={0.4} name="Volume" isAnimationActive={false} />
+                      )}
+
+                      {showBollinger && (
+                        <>
+                          <Line yAxisId="price" type="monotone" dataKey="bbUpper" stroke="#64748b" strokeDasharray="3 3" dot={false} strokeWidth={1} name="BB Upper" isAnimationActive={false} />
+                          <Line yAxisId="price" type="monotone" dataKey="bbLower" stroke="#64748b" strokeDasharray="3 3" dot={false} strokeWidth={1} name="BB Lower" isAnimationActive={false} />
+                        </>
+                      )}
+
+                      {showSMA && (
+                        <Line yAxisId="price" type="monotone" dataKey="sma" stroke="#06b6d4" dot={false} strokeWidth={2} name={`SMA (${smaPeriod})`} isAnimationActive={false} />
+                      )}
+                      {showEMA && (
+                        <Line yAxisId="price" type="monotone" dataKey="ema" stroke="#8b5cf6" dot={false} strokeWidth={2} name={`EMA (${emaPeriod})`} isAnimationActive={false} />
+                      )}
+                      
+                      {/* Render either Line or Candlesticks based on user selection */}
+                      {chartType === 'line' ? (
+                        <Line 
+                          yAxisId="price"
+                          type="monotone" 
+                          dataKey="price" 
+                          stroke="#fbbf24" // Yellowish tone
+                          dot={false} 
+                          strokeWidth={2.5} 
+                          name="Price Action" 
+                          isAnimationActive={false} 
+                        />
+                      ) : (
+                        <Bar 
+                          yAxisId="price"
+                          dataKey="candleRange" 
+                          shape={<CustomCandlestick />} 
+                          name="Candles" 
+                          isAnimationActive={false} 
+                        />
+                      )}
+
+                    </ComposedChart>
+                  </ResponsiveContainer>
                 </div>
-                
-                <ResponsiveContainer width="100%" height="100%" className="relative z-10">
-                  <ComposedChart data={chartData} margin={{ top: 20, right: 10, left: 20, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                    
-                    <XAxis 
-                      dataKey="time" 
-                      stroke="#e2e8f0" 
-                      tick={{ fill: '#e2e8f0', fontSize: 13, fontWeight: 600 }}
-                      tickMargin={12}
-                      minTickGap={30}
-                      axisLine={{ stroke: '#334155' }}
-                    />
-                    
-                    <YAxis 
-                      yAxisId="price"
-                      domain={['auto', 'auto']} 
-                      stroke="#e2e8f0" 
-                      tick={{ fill: '#e2e8f0', fontSize: 13, fontWeight: 600 }}
-                      tickFormatter={(val) => `$${val.toLocaleString()}`}
-                      width={80}
-                      axisLine={{ stroke: '#334155' }}
-                      tickLine={{ stroke: '#334155' }}
-                    />
 
-                    {/* Secondary hidden Y-Axis for Volume (scaled up so bars stay at the bottom) */}
-                    <YAxis 
-                      yAxisId="volume" 
-                      orientation="right" 
-                      domain={[0, dataMax => dataMax * 4]} 
-                      hide={true} 
-                    />
-
-                    <Tooltip 
-                      contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', color: '#f8fafc', borderRadius: '0.5rem', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.5)' }}
-                      itemStyle={{ color: '#e2e8f0', fontSize: '14px', padding: '2px 0' }}
-                      labelStyle={{ color: '#94a3b8', marginBottom: '8px', fontSize: '13px', fontWeight: 600 }}
-                      formatter={(value, name) => {
-                        if (name === 'Volume') return [Number(value).toLocaleString(), name];
-                        return [`$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, name];
-                      }}
-                    />
-                    <Legend wrapperStyle={{ paddingTop: '15px' }} iconType="circle" />
-                    
-                    {/* Fibonacci Retracement Lines */}
-                    {showFib && fibLevels && (
-                      <>
-                        <ReferenceLine yAxisId="price" y={fibLevels[0]} stroke="#ef4444" strokeDasharray="3 3" strokeOpacity={0.6} label={{ position: 'insideTopLeft', value: '0.0%', fill: '#ef4444', fontSize: 11, fontWeight: 600 }} />
-                        <ReferenceLine yAxisId="price" y={fibLevels[0.236]} stroke="#f97316" strokeDasharray="3 3" strokeOpacity={0.6} label={{ position: 'insideTopLeft', value: '23.6%', fill: '#f97316', fontSize: 11, fontWeight: 600 }} />
-                        <ReferenceLine yAxisId="price" y={fibLevels[0.382]} stroke="#eab308" strokeDasharray="3 3" strokeOpacity={0.6} label={{ position: 'insideTopLeft', value: '38.2%', fill: '#eab308', fontSize: 11, fontWeight: 600 }} />
-                        <ReferenceLine yAxisId="price" y={fibLevels[0.5]} stroke="#22c55e" strokeDasharray="3 3" strokeOpacity={0.6} label={{ position: 'insideTopLeft', value: '50.0%', fill: '#22c55e', fontSize: 11, fontWeight: 600 }} />
-                        <ReferenceLine yAxisId="price" y={fibLevels[0.618]} stroke="#3b82f6" strokeDasharray="3 3" strokeOpacity={0.6} label={{ position: 'insideTopLeft', value: '61.8%', fill: '#3b82f6', fontSize: 11, fontWeight: 600 }} />
-                        <ReferenceLine yAxisId="price" y={fibLevels[1]} stroke="#a855f7" strokeDasharray="3 3" strokeOpacity={0.6} label={{ position: 'insideTopLeft', value: '100.0%', fill: '#a855f7', fontSize: 11, fontWeight: 600 }} />
-                      </>
-                    )}
-
-                    {/* Volume Overlay */}
-                    {showVolume && (
-                      <Bar yAxisId="volume" dataKey="volume" fill="#3b82f6" opacity={0.4} name="Volume" isAnimationActive={false} />
-                    )}
-
-                    {/* Bollinger Bands */}
-                    {showBollinger && (
-                      <>
-                        <Line yAxisId="price" type="monotone" dataKey="bbUpper" stroke="#64748b" strokeDasharray="3 3" dot={false} strokeWidth={1} name="BB Upper" isAnimationActive={false} />
-                        <Line yAxisId="price" type="monotone" dataKey="bbLower" stroke="#64748b" strokeDasharray="3 3" dot={false} strokeWidth={1} name="BB Lower" isAnimationActive={false} />
-                      </>
-                    )}
-
-                    {/* Moving Averages */}
-                    {showSMA && (
-                      <Line yAxisId="price" type="monotone" dataKey="sma" stroke="#06b6d4" dot={false} strokeWidth={2} name={`SMA (${smaPeriod})`} isAnimationActive={false} />
-                    )}
-                    {showEMA && (
-                      <Line yAxisId="price" type="monotone" dataKey="ema" stroke="#8b5cf6" dot={false} strokeWidth={2} name={`EMA (${emaPeriod})`} isAnimationActive={false} />
-                    )}
-                    
-                    {/* Main Price Action Line */}
-                    <Line 
-                      yAxisId="price"
-                      type="monotone" 
-                      dataKey="price" 
-                      stroke="#fbbf24" 
-                      dot={false} 
-                      strokeWidth={2.5} 
-                      name="Price Action" 
-                      isAnimationActive={false} 
-                    />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
+                {/* Secondary RSI Chart */}
+                {showRSI && (
+                  <div className="w-full h-[150px] relative mt-2 border-t border-slate-800 pt-3">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={chartData} syncId="cryptoSync" margin={{ top: 5, right: 10, left: 20, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                        <XAxis 
+                          dataKey="time" 
+                          stroke="#e2e8f0" 
+                          tick={{ fill: '#e2e8f0', fontSize: 13, fontWeight: 600 }}
+                          tickMargin={12}
+                          minTickGap={30}
+                          axisLine={{ stroke: '#334155' }}
+                        />
+                        <YAxis 
+                          domain={[0, 100]} 
+                          stroke="#e2e8f0" 
+                          tick={{ fill: '#e2e8f0', fontSize: 12, fontWeight: 600 }} 
+                          width={80} 
+                          ticks={[30, 50, 70]} 
+                          axisLine={{ stroke: '#334155' }} 
+                          tickLine={{ stroke: '#334155' }}
+                        />
+                        <Tooltip 
+                          contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', color: '#f8fafc', borderRadius: '0.5rem', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.5)' }}
+                          itemStyle={{ color: '#d946ef', fontSize: '14px', fontWeight: 'bold' }}
+                          labelStyle={{ display: 'none' }}
+                          formatter={(value, name) => {
+                            if (name === 'rsi') return [Number(value).toFixed(2), 'RSI'];
+                            return [];
+                          }}
+                        />
+                        <ReferenceLine y={70} stroke="#ef4444" strokeDasharray="3 3" strokeOpacity={0.6} />
+                        <ReferenceLine y={30} stroke="#10b981" strokeDasharray="3 3" strokeOpacity={0.6} />
+                        
+                        <Line 
+                          type="monotone" 
+                          dataKey="rsi" 
+                          stroke="#d946ef" 
+                          dot={false} 
+                          strokeWidth={2} 
+                          name="rsi" 
+                          isAnimationActive={false} 
+                        />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </>
             )}
           </div>
 
@@ -407,71 +577,49 @@ export default function LiveCryptoDashboard() {
               </h2>
               
               <div className="space-y-4">
-                {/* SMA Toggle */}
                 <label className="flex items-center space-x-3 cursor-pointer group">
                   <div className="relative flex items-center justify-center">
-                    <input 
-                      type="checkbox" 
-                      checked={showSMA} 
-                      onChange={(e) => setShowSMA(e.target.checked)}
-                      className="peer sr-only"
-                    />
+                    <input type="checkbox" checked={showSMA} onChange={(e) => setShowSMA(e.target.checked)} className="peer sr-only" />
                     <div className="w-10 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-cyan-500"></div>
                   </div>
                   <span className="text-slate-300 group-hover:text-white transition-colors text-sm font-medium">SMA (14)</span>
                 </label>
 
-                {/* EMA Toggle */}
                 <label className="flex items-center space-x-3 cursor-pointer group">
                   <div className="relative flex items-center justify-center">
-                    <input 
-                      type="checkbox" 
-                      checked={showEMA} 
-                      onChange={(e) => setShowEMA(e.target.checked)}
-                      className="peer sr-only"
-                    />
+                    <input type="checkbox" checked={showEMA} onChange={(e) => setShowEMA(e.target.checked)} className="peer sr-only" />
                     <div className="w-10 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-purple-500"></div>
                   </div>
                   <span className="text-slate-300 group-hover:text-white transition-colors text-sm font-medium">EMA (9)</span>
                 </label>
 
-                {/* Fib Toggle */}
                 <label className="flex items-center space-x-3 cursor-pointer group">
                   <div className="relative flex items-center justify-center">
-                    <input 
-                      type="checkbox" 
-                      checked={showFib} 
-                      onChange={(e) => setShowFib(e.target.checked)}
-                      className="peer sr-only"
-                    />
+                    <input type="checkbox" checked={showRSI} onChange={(e) => setShowRSI(e.target.checked)} className="peer sr-only" />
+                    <div className="w-10 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-fuchsia-500"></div>
+                  </div>
+                  <span className="text-slate-300 group-hover:text-white transition-colors text-sm font-medium">RSI (14)</span>
+                </label>
+
+                <label className="flex items-center space-x-3 cursor-pointer group">
+                  <div className="relative flex items-center justify-center">
+                    <input type="checkbox" checked={showFib} onChange={(e) => setShowFib(e.target.checked)} className="peer sr-only" />
                     <div className="w-10 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-500"></div>
                   </div>
                   <span className="text-slate-300 group-hover:text-white transition-colors text-sm font-medium">Fibonacci Levels</span>
                 </label>
 
-                {/* Bollinger Bands Toggle */}
                 <label className="flex items-center space-x-3 cursor-pointer group">
                   <div className="relative flex items-center justify-center">
-                    <input 
-                      type="checkbox" 
-                      checked={showBollinger} 
-                      onChange={(e) => setShowBollinger(e.target.checked)}
-                      className="peer sr-only"
-                    />
+                    <input type="checkbox" checked={showBollinger} onChange={(e) => setShowBollinger(e.target.checked)} className="peer sr-only" />
                     <div className="w-10 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-slate-400"></div>
                   </div>
                   <span className="text-slate-300 group-hover:text-white transition-colors text-sm font-medium">Bollinger Bands (20)</span>
                 </label>
 
-                {/* Volume Toggle */}
                 <label className="flex items-center space-x-3 cursor-pointer group">
                   <div className="relative flex items-center justify-center">
-                    <input 
-                      type="checkbox" 
-                      checked={showVolume} 
-                      onChange={(e) => setShowVolume(e.target.checked)}
-                      className="peer sr-only"
-                    />
+                    <input type="checkbox" checked={showVolume} onChange={(e) => setShowVolume(e.target.checked)} className="peer sr-only" />
                     <div className="w-10 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-500"></div>
                   </div>
                   <span className="text-slate-300 group-hover:text-white transition-colors text-sm font-medium">Volume Overlay</span>

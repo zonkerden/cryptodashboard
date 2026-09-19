@@ -386,7 +386,7 @@ export default function LiveCryptoDashboard() {
                       yAxisId="price"
                       type="monotone" 
                       dataKey="price" 
-                      stroke="#e2e8f0" 
+                      stroke="#fbbf24" 
                       dot={false} 
                       strokeWidth={2.5} 
                       name="Price Action" 

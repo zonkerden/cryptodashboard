@@ -399,14 +399,14 @@ export default function LiveCryptoDashboard() {
           <div className="lg:col-span-3 bg-slate-900 rounded-xl p-2 sm:p-4 shadow-xl border border-slate-800 relative flex flex-col transition-all duration-300">
             
             {loading ? (
-              <div className="w-full h-[500px] flex flex-col items-center justify-center text-slate-500">
+              <div className="w-full h-[600px] flex flex-col items-center justify-center text-slate-500">
                 <Loader2 className="w-10 h-10 animate-spin mb-4 text-blue-500" />
                 <p>Fetching historical data...</p>
               </div>
             ) : (
               <>
                 {/* Main Price Chart */}
-                <div className={`w-full relative transition-all duration-300 ${showRSI ? 'h-[350px]' : 'h-[500px]'}`}>
+                <div className={`w-full relative transition-all duration-300 ${showRSI ? 'h-[450px]' : 'h-[600px]'}`}>
                   <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.03] z-0">
                     <span className="text-[10rem] font-bold tracking-tighter text-white">
                       {COIN_CONFIG[selectedPair].label}

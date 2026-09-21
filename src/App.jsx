@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   ResponsiveContainer, 
   ComposedChart, 
@@ -8,23 +8,16 @@ import {
   YAxis, 
   CartesianGrid, 
   Tooltip, 
-  Legend,
   ReferenceLine,
   Customized
 } from 'recharts';
 import { 
   Activity, 
-  Wifi, 
-  WifiOff, 
   Loader2, 
-  BarChart2, 
   TrendingUp, 
-  Gauge,
   Newspaper,
-  ExternalLink,
   Clock,
   List,
-  AlignEndHorizontal,
   Layers,
   Settings,
   TrendingDown
@@ -254,34 +247,54 @@ const calculateAutoSR = (data) => {
   return grouped.sort((a,b) => b.weight - a.weight).slice(0, 5);
 };
 
-// The fully decoupled, Vercel-Proof VPVR Component
+// ============================================================================
+// THE BULLETPROOF VERCEL VPVR OVERLAY (React.cloneElement Safe)
+// ============================================================================
 const VpvrOverlay = (props) => {
-  const { showVPVR, chartData, offset } = props;
+  const { showVPVR, chartData, offset, yAxisMap } = props;
   
   if (!showVPVR || !chartData || chartData.length === 0 || !offset) return null;
 
-  // 1. DYNAMIC SCALE FINDER: Bypasses Vercel minification of 'yAxisMap'
-  let yScale = null;
-  if (props.yAxisMap && props.yAxisMap.price && typeof props.yAxisMap.price.scale === 'function') {
-    yScale = props.yAxisMap.price.scale;
-  } else {
-    // If minified, actively hunt for the scale function inside the props object
-    const maps = Object.values(props).filter(val => val && typeof val === 'object');
-    for (const map of maps) {
-      const axes = Object.values(map);
-      for (const axis of axes) {
-        if (axis && typeof axis.scale === 'function') {
-          yScale = axis.scale;
-          break;
+  // 1. Recursive Scale Finder to defeat aggressive Vercel/Webpack minifiers
+  const findScale = (obj, depth = 0) => {
+    if (!obj || depth > 5) return null;
+    if (typeof obj.scale === 'function') return obj.scale;
+    if (typeof obj === 'object') {
+      for (const key of Object.keys(obj)) {
+        if (obj[key] && typeof obj[key] === 'object') {
+          if (key === 'price' && typeof obj[key].scale === 'function') return obj[key].scale;
+          const found = findScale(obj[key], depth + 1);
+          if (found) return found;
         }
       }
-      if (yScale) break;
     }
+    return null;
+  };
+
+  let yScale = null;
+  // Attempt safe direct path first
+  if (yAxisMap && yAxisMap.price && typeof yAxisMap.price.scale === 'function') {
+    yScale = yAxisMap.price.scale;
+  } else {
+    // If it fails, hunt for it
+    yScale = findScale(props);
   }
 
-  if (!yScale) return null; // Failsafe if scale still can't be found
+  // 2. Pure Math Fallback if Scale is completely stripped by minifier
+  if (!yScale) {
+    const prices = chartData.flatMap(d => [d.high !== undefined ? d.high : (d.price || 0), d.low !== undefined ? d.low : (d.price || 0)]);
+    const minP = Math.min(...prices);
+    const maxP = Math.max(...prices);
+    
+    if (minP >= maxP || !isFinite(minP) || !isFinite(maxP)) return null;
+
+    yScale = (val) => {
+      // Linear mapping to absolute pixels using offset box
+      return offset.top + offset.height - ((val - minP) / (maxP - minP)) * offset.height;
+    };
+  }
   
-  // 2. GENERATE VOLUME BINS
+  // 3. GENERATE VOLUME BINS
   const binsCount = 50;
   let minPrice = Math.min(...chartData.map(d => d.low !== undefined ? d.low : (d.price || 0)));
   let maxPrice = Math.max(...chartData.map(d => d.high !== undefined ? d.high : (d.price || 0)));
@@ -338,6 +351,7 @@ const VpvrOverlay = (props) => {
     </g>
   );
 };
+// ============================================================================
 
 const TIMEFRAMES = {
   'LIVE': { label: 'Live', interval: '1m', limit: 100 },
@@ -653,8 +667,8 @@ function LiveCryptoDashboard() {
                   <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart data={chartData} margin={{ top: 15, right: 0, left: 0, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#2A2E39" vertical={false} />
-                      <XAxis dataKey="time" stroke="#787B86" tick={showRSI || showMACD ? false : { fill: '#787B86', fontSize: 11 }} tickMargin={8} minTickGap={30} axisLine={{ stroke: '#2A2E39' }} tickLine={false} />
-                      <YAxis yAxisId="price" domain={['auto', 'auto']} stroke="#787B86" tick={{ fill: '#787B86', fontSize: 11, fontFamily: 'monospace' }} tickFormatter={(val) => val.toLocaleString()} width={65} orientation="right" axisLine={false} tickLine={false} />
+                      <XAxis dataKey="time" stroke="#D1D4DC" tick={showRSI || showMACD ? false : { fill: '#D1D4DC', fontSize: 12, fontWeight: 600 }} tickMargin={10} minTickGap={30} axisLine={{ stroke: '#2A2E39' }} tickLine={false} />
+                      <YAxis yAxisId="price" domain={['auto', 'auto']} stroke="#D1D4DC" tick={{ fill: '#D1D4DC', fontSize: 12, fontWeight: 600, fontFamily: 'monospace' }} tickFormatter={(val) => val.toLocaleString()} width={75} orientation="right" axisLine={false} tickLine={false} />
                       <YAxis yAxisId="volume" orientation="left" domain={[0, 'auto']} hide={true} />
                       
                       <Tooltip 
@@ -678,8 +692,8 @@ function LiveCryptoDashboard() {
                         <ReferenceLine key={`sr-${idx}`} yAxisId="price" y={lvl.price} stroke={lvl.type === 'support' ? TV_COLORS.green : TV_COLORS.red} strokeDasharray="3 3" strokeOpacity={0.6} label={{ position: lvl.type === 'support' ? 'insideBottomLeft' : 'insideTopLeft', value: `${lvl.type === 'support' ? 'Support' : 'Resistance'}`, fill: lvl.type === 'support' ? TV_COLORS.green : TV_COLORS.red, fontSize: 10 }} />
                       ))}
 
-                      {/* Standalone VPVR Injector mapped to internal Recharts Props safely */}
-                      <Customized component={(rechartsProps) => <VpvrOverlay {...rechartsProps} showVPVR={showVPVR} chartData={chartData} />} />
+                      {/* BULLETPROOF REACT INSTANCE CLONING FOR VPVR */}
+                      <Customized component={<VpvrOverlay showVPVR={showVPVR} chartData={chartData} />} />
                       
                       {showVolume && <Bar yAxisId="volume" dataKey="volume" fill={TV_COLORS.blue} opacity={0.3} name="Volume" isAnimationActive={false} />}
                       
@@ -706,8 +720,8 @@ function LiveCryptoDashboard() {
                     <ResponsiveContainer width="100%" height="100%">
                       <ComposedChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#2A2E39" vertical={false} />
-                        <XAxis dataKey="time" stroke="#787B86" tick={showMACD ? false : { fill: '#787B86', fontSize: 11 }} tickMargin={8} minTickGap={30} axisLine={false} tickLine={false} />
-                        <YAxis domain={[0, 100]} stroke="#787B86" tick={{ fill: '#787B86', fontSize: 11, fontFamily: 'monospace' }} width={65} orientation="right" ticks={[30, 50, 70]} axisLine={false} tickLine={false} />
+                        <XAxis dataKey="time" stroke="#D1D4DC" tick={showMACD ? false : { fill: '#D1D4DC', fontSize: 12, fontWeight: 600 }} tickMargin={10} minTickGap={30} axisLine={false} tickLine={false} />
+                        <YAxis domain={[0, 100]} stroke="#D1D4DC" tick={{ fill: '#D1D4DC', fontSize: 12, fontWeight: 600, fontFamily: 'monospace' }} width={75} orientation="right" ticks={[30, 50, 70]} axisLine={false} tickLine={false} />
                         <Tooltip contentStyle={{ backgroundColor: '#1E222D', borderColor: '#2A2E39' }} labelStyle={{ display: 'none' }} itemStyle={{ color: '#9C27B0', fontSize: '12px' }} formatter={(value) => [Number(value).toFixed(2), 'RSI']} />
                         <ReferenceLine y={70} stroke={TV_COLORS.red} strokeDasharray="3 3" strokeOpacity={0.5} />
                         <ReferenceLine y={30} stroke={TV_COLORS.green} strokeDasharray="3 3" strokeOpacity={0.5} />
@@ -722,8 +736,8 @@ function LiveCryptoDashboard() {
                     <ResponsiveContainer width="100%" height="100%">
                       <ComposedChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#2A2E39" vertical={false} />
-                        <XAxis dataKey="time" stroke="#787B86" tick={{ fill: '#787B86', fontSize: 11 }} tickMargin={8} minTickGap={30} axisLine={false} tickLine={false} />
-                        <YAxis domain={['auto', 'auto']} stroke="#787B86" tick={{ fill: '#787B86', fontSize: 11, fontFamily: 'monospace' }} width={65} orientation="right" axisLine={false} tickLine={false} />
+                        <XAxis dataKey="time" stroke="#D1D4DC" tick={{ fill: '#D1D4DC', fontSize: 12, fontWeight: 600 }} tickMargin={10} minTickGap={30} axisLine={false} tickLine={false} />
+                        <YAxis domain={['auto', 'auto']} stroke="#D1D4DC" tick={{ fill: '#D1D4DC', fontSize: 12, fontWeight: 600, fontFamily: 'monospace' }} width={75} orientation="right" axisLine={false} tickLine={false} />
                         <Tooltip contentStyle={{ backgroundColor: '#1E222D', borderColor: '#2A2E39' }} labelStyle={{ display: 'none' }} formatter={(value, name) => [Number(value).toFixed(2), name.replace('macd', '')]} />
                         <Bar dataKey="macdHistPos" stackId="a" fill={TV_COLORS.green} isAnimationActive={false} />
                         <Bar dataKey="macdHistNeg" stackId="a" fill={TV_COLORS.red} isAnimationActive={false} />
@@ -806,10 +820,10 @@ function LiveCryptoDashboard() {
                 <div className="flex flex-col-reverse justify-end flex-1 overflow-hidden">
                   {orderBook.asks.slice(0, 7).map((ask, i) => (
                     <div key={`ask-${i}`} className="grid grid-cols-3 relative py-[3px] z-10 hover:bg-[#2A2E39]/50 transition-colors">
-                      <div className="absolute top-0 right-0 h-full bg-[#F23645]/15 z-0" style={{ width: `${(ask.total / orderBook.maxVol) * 100}%` }} />
+                      <div className="absolute top-0 right-0 h-full bg-[#F23645]/15 z-0" style={{ width: `${(ask.total / (orderBook.maxVol || 1)) * 100}%` }} />
                       <span className="text-[#F23645] z-10 text-left pl-1">{formatNumber(ask.price, 2, 2)}</span>
                       <span className="text-[#D1D4DC] z-10 text-right">{ask.qty.toFixed(3)}</span>
-                      <span className="text-[#787B86] z-10 text-right pr-1">{ask.total.toFixed(3)}</span>
+                      <span className="text-[#D1D4DC] z-10 text-right pr-1">{ask.total.toFixed(3)}</span>
                     </div>
                   ))}
                 </div>
@@ -820,10 +834,10 @@ function LiveCryptoDashboard() {
                 <div className="flex flex-col flex-1 overflow-hidden">
                   {orderBook.bids.slice(0, 7).map((bid, i) => (
                     <div key={`bid-${i}`} className="grid grid-cols-3 relative py-[3px] z-10 hover:bg-[#2A2E39]/50 transition-colors">
-                      <div className="absolute top-0 right-0 h-full bg-[#089981]/15 z-0" style={{ width: `${(bid.total / orderBook.maxVol) * 100}%` }} />
+                      <div className="absolute top-0 right-0 h-full bg-[#089981]/15 z-0" style={{ width: `${(bid.total / (orderBook.maxVol || 1)) * 100}%` }} />
                       <span className="text-[#089981] z-10 text-left pl-1">{formatNumber(bid.price, 2, 2)}</span>
                       <span className="text-[#D1D4DC] z-10 text-right">{bid.qty.toFixed(3)}</span>
-                      <span className="text-[#787B86] z-10 text-right pr-1">{bid.total.toFixed(3)}</span>
+                      <span className="text-[#D1D4DC] z-10 text-right pr-1">{bid.total.toFixed(3)}</span>
                     </div>
                   ))}
                 </div>

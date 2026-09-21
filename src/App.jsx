@@ -251,7 +251,6 @@ const calculateAutoSR = (data) => {
   return grouped.sort((a,b) => b.weight - a.weight).slice(0, 5);
 };
 
-// --- Configs ---
 const TIMEFRAMES = {
   'LIVE': { label: 'Live', interval: '1m', limit: 100 },
   '1M': { label: '1M', interval: '4h', limit: 180 },
@@ -310,7 +309,7 @@ function LiveCryptoDashboard() {
   const [orderBook, setOrderBook] = useState({ bids: [], asks: [], maxVol: 0 });
   const [tickers, setTickers] = useState({});
 
-  // Indicators
+  // Indicators State
   const [showSMA, setShowSMA] = useState(true);
   const [showEMA, setShowEMA] = useState(false);
   const [showFib, setShowFib] = useState(false);
@@ -456,7 +455,6 @@ function LiveCryptoDashboard() {
     return () => { isMounted = false; if (pollInterval) clearInterval(pollInterval); };
   }, [selectedPair, selectedTimeframe]);
 
-  // Process Indicators
   const chartData = useMemo(() => {
     if (!data || data.length === 0) return [];
     let processed = calculateHeikinAshi(data);
@@ -469,21 +467,21 @@ function LiveCryptoDashboard() {
     return processed;
   }, [data, smaPeriod, emaPeriod]);
 
-  // Strict Y-Axis Domain Lock (Synchronizes the Main Chart and the VPVR Overlay)
+  // Strict Y-Axis Domain Lock (Forces absolute synchronization)
   const yDomain = useMemo(() => {
-    if (!chartData || chartData.length === 0) return ['auto', 'auto'];
+    if (!chartData || chartData.length === 0) return [0, 100000]; // Safe numerical fallback
     const prices = chartData.flatMap(d => [d.low !== undefined ? d.low : d.price, d.high !== undefined ? d.high : d.price]);
     const min = Math.min(...prices);
     const max = Math.max(...prices);
-    if (min === max || !isFinite(min) || !isFinite(max)) return ['auto', 'auto'];
+    if (min === max || !isFinite(min) || !isFinite(max)) return [0, 100000];
     const padding = (max - min) * 0.05; 
     return [min - padding, max + padding];
   }, [chartData]);
 
-  // VPVR Dual-Chart Generation Data
+  // VPVR Array Generation
   const vpvrData = useMemo(() => {
-    if (!showVPVR || !chartData || chartData.length === 0 || yDomain[0] === 'auto') return [];
-    const binsCount = 60; // 60 rows for high resolution
+    if (!showVPVR || !chartData || chartData.length === 0 || yDomain[0] === 0) return [];
+    const binsCount = 60; // Smooth resolution
     const [minPrice, maxPrice] = yDomain;
     const binSize = (maxPrice - minPrice) / binsCount;
 
@@ -501,10 +499,12 @@ function LiveCryptoDashboard() {
       if (idx >= binsCount) idx = binsCount - 1;
       if (idx < 0) idx = 0;
       
-      bins[idx].volume += vol;
-      const isUp = (d.close || d.price) >= (d.open || d.price);
-      if (isUp) bins[idx].upVolume += vol;
-      else bins[idx].downVolume += vol;
+      if(bins[idx]) {
+        bins[idx].volume += vol;
+        const isUp = (d.close || d.price) >= (d.open || d.price);
+        if (isUp) bins[idx].upVolume += vol;
+        else bins[idx].downVolume += vol;
+      }
     });
 
     return bins;
@@ -610,17 +610,20 @@ function LiveCryptoDashboard() {
                 {/* BULLETPROOF DUAL-CHART ARCHITECTURE */}
                 <div className="flex-1 w-full min-h-[250px] relative">
                   
-                  {/* LAYER 1: VPVR OVERLAY (Rendered as a standard Recharts BarChart so Vercel can't strip it) */}
+                  {/* LAYER 1: VPVR OVERLAY (Rendered purely with public Recharts API components to bypass Vercel Minification) */}
                   {showVPVR && (
-                    <div className="absolute inset-0 z-0 opacity-50 pointer-events-none">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart layout="vertical" data={vpvrData} margin={{ top: 15, right: 75, left: 0, bottom: 30 }} barCategoryGap="0%">
-                          <XAxis type="number" hide reversed={true} domain={[0, dataMax => dataMax * 4]} /> {/* Limits width to 25% of screen */}
-                          <YAxis type="number" dataKey="priceLevel" domain={yDomain} allowDataOverflow={true} hide />
-                          <Bar dataKey="downVolume" stackId="a" fill={TV_COLORS.red} isAnimationActive={false} />
-                          <Bar dataKey="upVolume" stackId="a" fill={TV_COLORS.blue} isAnimationActive={false} />
-                        </BarChart>
-                      </ResponsiveContainer>
+                    <div className="absolute top-[15px] bottom-[30px] left-0 right-[75px] z-0 opacity-40 pointer-events-none flex justify-end">
+                      <div className="w-[35%] h-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                          {/* We use margin:0 here because the absolute container above perfectly maps to the main chart's drawing area */}
+                          <BarChart layout="vertical" data={vpvrData} margin={{ top: 0, right: 0, left: 0, bottom: 0 }} barCategoryGap={0}>
+                            <XAxis type="number" hide reversed={true} domain={[0, 'dataMax']} />
+                            <YAxis type="number" dataKey="priceLevel" domain={yDomain} hide />
+                            <Bar dataKey="downVolume" stackId="a" fill={TV_COLORS.red} isAnimationActive={false} />
+                            <Bar dataKey="upVolume" stackId="a" fill={TV_COLORS.blue} isAnimationActive={false} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
                     </div>
                   )}
 
@@ -678,6 +681,7 @@ function LiveCryptoDashboard() {
                   </div>
                 </div>
 
+                {/* Sub-panes (RSI, MACD) */}
                 {showRSI && (
                   <div className="w-full h-32 shrink-0 border-t border-[#2A2E39] pt-2">
                     <ResponsiveContainer width="100%" height="100%">

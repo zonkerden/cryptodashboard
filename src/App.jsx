@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   ResponsiveContainer, 
-  ComposedChart, 
+  ComposedChart,
+  BarChart, 
   Line,
   Bar, 
   XAxis, 
   YAxis, 
   CartesianGrid, 
   Tooltip, 
-  ReferenceLine,
-  Customized
+  ReferenceLine
 } from 'recharts';
 import { 
   Activity, 
@@ -23,6 +23,7 @@ import {
   TrendingDown
 } from 'lucide-react';
 
+// --- Universal API Router (Bypasses ISP Blocks) ---
 const fetchBinance = async (endpoint) => {
   const endpoints = [
     'https://data-api.binance.vision', 
@@ -43,6 +44,7 @@ const fetchBinance = async (endpoint) => {
   throw new Error('All Binance APIs failed or are blocked.');
 };
 
+// --- Crash Catcher (Error Boundary) ---
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -96,6 +98,7 @@ const TV_COLORS = {
   blue: '#2962FF'
 };
 
+// --- Custom Candlestick Renderer ---
 const CustomCandlestick = (props) => {
   const { x, y, width, height, payload, isHeikinAshi } = props;
   if (!payload) return null;
@@ -125,6 +128,7 @@ const CustomCandlestick = (props) => {
   );
 };
 
+// --- Indicator Math Functions ---
 const calculateHeikinAshi = (data) => {
   if (!data || data.length === 0) return [];
   let prevHaOpen = data[0].open;
@@ -247,112 +251,7 @@ const calculateAutoSR = (data) => {
   return grouped.sort((a,b) => b.weight - a.weight).slice(0, 5);
 };
 
-// ============================================================================
-// THE BULLETPROOF VERCEL VPVR OVERLAY (React.cloneElement Safe)
-// ============================================================================
-const VpvrOverlay = (props) => {
-  const { showVPVR, chartData, offset, yAxisMap } = props;
-  
-  if (!showVPVR || !chartData || chartData.length === 0 || !offset) return null;
-
-  // 1. Recursive Scale Finder to defeat aggressive Vercel/Webpack minifiers
-  const findScale = (obj, depth = 0) => {
-    if (!obj || depth > 5) return null;
-    if (typeof obj.scale === 'function') return obj.scale;
-    if (typeof obj === 'object') {
-      for (const key of Object.keys(obj)) {
-        if (obj[key] && typeof obj[key] === 'object') {
-          if (key === 'price' && typeof obj[key].scale === 'function') return obj[key].scale;
-          const found = findScale(obj[key], depth + 1);
-          if (found) return found;
-        }
-      }
-    }
-    return null;
-  };
-
-  let yScale = null;
-  // Attempt safe direct path first
-  if (yAxisMap && yAxisMap.price && typeof yAxisMap.price.scale === 'function') {
-    yScale = yAxisMap.price.scale;
-  } else {
-    // If it fails, hunt for it
-    yScale = findScale(props);
-  }
-
-  // 2. Pure Math Fallback if Scale is completely stripped by minifier
-  if (!yScale) {
-    const prices = chartData.flatMap(d => [d.high !== undefined ? d.high : (d.price || 0), d.low !== undefined ? d.low : (d.price || 0)]);
-    const minP = Math.min(...prices);
-    const maxP = Math.max(...prices);
-    
-    if (minP >= maxP || !isFinite(minP) || !isFinite(maxP)) return null;
-
-    yScale = (val) => {
-      // Linear mapping to absolute pixels using offset box
-      return offset.top + offset.height - ((val - minP) / (maxP - minP)) * offset.height;
-    };
-  }
-  
-  // 3. GENERATE VOLUME BINS
-  const binsCount = 50;
-  let minPrice = Math.min(...chartData.map(d => d.low !== undefined ? d.low : (d.price || 0)));
-  let maxPrice = Math.max(...chartData.map(d => d.high !== undefined ? d.high : (d.price || 0)));
-  
-  if (minPrice >= maxPrice || !isFinite(minPrice) || !isFinite(maxPrice)) return null;
-  
-  const binSize = (maxPrice - minPrice) / binsCount;
-  const bins = Array.from({ length: binsCount }, (_, i) => ({
-    top: minPrice + ((i + 1) * binSize), bottom: minPrice + (i * binSize), volume: 0, upVolume: 0, downVolume: 0
-  }));
-  
-  chartData.forEach(d => {
-    const typPrice = d.candleRange ? (d.candleRange[0] + d.candleRange[1] + (d.close || d.price)) / 3 : d.price;
-    const vol = d.volume || 0;
-    
-    let idx = Math.floor((typPrice - minPrice) / binSize);
-    if (idx >= binsCount) idx = binsCount - 1;
-    if (idx < 0) idx = 0;
-    
-    bins[idx].volume += vol;
-    
-    const isUp = (d.close || d.price) >= (d.open || d.price);
-    if (isUp) bins[idx].upVolume += vol;
-    else bins[idx].downVolume += vol;
-  });
-  
-  const maxVol = Math.max(...bins.map(b => b.volume));
-  if (maxVol <= 0 || !isFinite(maxVol)) return null;
-  
-  const maxBarWidth = offset.width * 0.25; 
-  const startX = offset.left + offset.width; 
-
-  return (
-    <g className="vpvr-layer">
-      {bins.map((bin, i) => {
-        const y1 = yScale(bin.top);
-        const y2 = yScale(bin.bottom);
-        const topY = Math.min(y1, y2);
-        const rectHeight = Math.max(Math.abs(y1 - y2) - 1, 1); 
-        
-        const totalWidth = (bin.volume / maxVol) * maxBarWidth;
-        if (totalWidth <= 0 || !isFinite(totalWidth)) return null;
-        
-        const upWidth = bin.volume > 0 ? (bin.upVolume / bin.volume) * totalWidth : 0;
-        const downWidth = bin.volume > 0 ? (bin.downVolume / bin.volume) * totalWidth : 0;
-        
-        return (
-          <g key={`vpvr-${i}`}>
-            <rect x={startX - totalWidth} y={topY} width={downWidth} height={rectHeight} fill={TV_COLORS.red} fillOpacity={0.4} />
-            <rect x={startX - totalWidth + downWidth} y={topY} width={upWidth} height={rectHeight} fill={TV_COLORS.blue} fillOpacity={0.4} />
-          </g>
-        );
-      })}
-    </g>
-  );
-};
-// ============================================================================
-
+// --- Configs ---
 const TIMEFRAMES = {
   'LIVE': { label: 'Live', interval: '1m', limit: 100 },
   '1M': { label: '1M', interval: '4h', limit: 180 },
@@ -426,6 +325,7 @@ function LiveCryptoDashboard() {
   const smaPeriod = 14;
   const emaPeriod = 9;
 
+  // Initial Fetches (Sentiment, News, Tickers)
   useEffect(() => {
     let isMounted = true;
     fetch('https://api.alternative.me/fng/')
@@ -469,6 +369,7 @@ function LiveCryptoDashboard() {
     return () => { isMounted = false; clearInterval(interval); };
   }, []);
 
+  // DOM / Recent Trades Poller
   useEffect(() => {
     let isMounted = true;
     let fallbackInterval = setInterval(async () => {
@@ -499,6 +400,7 @@ function LiveCryptoDashboard() {
     return () => { isMounted = false; clearInterval(fallbackInterval); };
   }, [selectedPair]);
 
+  // Main Chart Data Poller
   useEffect(() => {
     let pollInterval = null;
     let isMounted = true;
@@ -554,6 +456,7 @@ function LiveCryptoDashboard() {
     return () => { isMounted = false; if (pollInterval) clearInterval(pollInterval); };
   }, [selectedPair, selectedTimeframe]);
 
+  // Process Indicators
   const chartData = useMemo(() => {
     if (!data || data.length === 0) return [];
     let processed = calculateHeikinAshi(data);
@@ -565,6 +468,47 @@ function LiveCryptoDashboard() {
     processed = calculateVWAP(processed);
     return processed;
   }, [data, smaPeriod, emaPeriod]);
+
+  // Strict Y-Axis Domain Lock (Synchronizes the Main Chart and the VPVR Overlay)
+  const yDomain = useMemo(() => {
+    if (!chartData || chartData.length === 0) return ['auto', 'auto'];
+    const prices = chartData.flatMap(d => [d.low !== undefined ? d.low : d.price, d.high !== undefined ? d.high : d.price]);
+    const min = Math.min(...prices);
+    const max = Math.max(...prices);
+    if (min === max || !isFinite(min) || !isFinite(max)) return ['auto', 'auto'];
+    const padding = (max - min) * 0.05; 
+    return [min - padding, max + padding];
+  }, [chartData]);
+
+  // VPVR Dual-Chart Generation Data
+  const vpvrData = useMemo(() => {
+    if (!showVPVR || !chartData || chartData.length === 0 || yDomain[0] === 'auto') return [];
+    const binsCount = 60; // 60 rows for high resolution
+    const [minPrice, maxPrice] = yDomain;
+    const binSize = (maxPrice - minPrice) / binsCount;
+
+    const bins = Array.from({ length: binsCount }, (_, i) => ({
+      priceLevel: minPrice + (i * binSize) + (binSize / 2),
+      volume: 0,
+      upVolume: 0,
+      downVolume: 0
+    }));
+
+    chartData.forEach(d => {
+      const typPrice = d.candleRange ? (d.candleRange[0] + d.candleRange[1] + (d.close || d.price)) / 3 : d.price;
+      const vol = d.volume || 0;
+      let idx = Math.floor((typPrice - minPrice) / binSize);
+      if (idx >= binsCount) idx = binsCount - 1;
+      if (idx < 0) idx = 0;
+      
+      bins[idx].volume += vol;
+      const isUp = (d.close || d.price) >= (d.open || d.price);
+      if (isUp) bins[idx].upVolume += vol;
+      else bins[idx].downVolume += vol;
+    });
+
+    return bins;
+  }, [chartData, showVPVR, yDomain]);
 
   const fibLevels = useMemo(() => {
     if (!showFib || !data || data.length === 0) return null;
@@ -663,56 +607,75 @@ function LiveCryptoDashboard() {
               </div>
             ) : (
               <>
+                {/* BULLETPROOF DUAL-CHART ARCHITECTURE */}
                 <div className="flex-1 w-full min-h-[250px] relative">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={chartData} margin={{ top: 15, right: 0, left: 0, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#2A2E39" vertical={false} />
-                      <XAxis dataKey="time" stroke="#D1D4DC" tick={showRSI || showMACD ? false : { fill: '#D1D4DC', fontSize: 12, fontWeight: 600 }} tickMargin={10} minTickGap={30} axisLine={{ stroke: '#2A2E39' }} tickLine={false} />
-                      <YAxis yAxisId="price" domain={['auto', 'auto']} stroke="#D1D4DC" tick={{ fill: '#D1D4DC', fontSize: 12, fontWeight: 600, fontFamily: 'monospace' }} tickFormatter={(val) => val.toLocaleString()} width={75} orientation="right" axisLine={false} tickLine={false} />
-                      <YAxis yAxisId="volume" orientation="left" domain={[0, 'auto']} hide={true} />
-                      
-                      <Tooltip 
-                        cursor={{ stroke: '#2A2E39', strokeWidth: 1, strokeDasharray: '4 4' }}
-                        contentStyle={{ backgroundColor: '#1E222D', borderColor: '#2A2E39', color: '#D1D4DC', borderRadius: '4px', padding: '8px', fontSize: '13px' }}
-                        itemStyle={{ color: '#D1D4DC', padding: '2px 0' }} labelStyle={{ color: '#787B86', marginBottom: '4px', fontSize: '12px' }}
-                        formatter={(value, name, props) => {
-                          if (name === 'Volume') return [Number(value || 0).toLocaleString(), name];
-                          if (name === 'Candles' || name === 'candleRange') return [`O: ${formatNumber(props.payload.open)} H: ${formatNumber(props.payload.high)} L: ${formatNumber(props.payload.low)} C: ${formatNumber(props.payload.close)}`, 'OHLC'];
-                          if (name === 'Heikin Ashi' || name === 'haCandleRange') return [`O: ${formatNumber(props.payload.haOpen)} H: ${formatNumber(props.payload.haHigh)} L: ${formatNumber(props.payload.haLow)} C: ${formatNumber(props.payload.haClose)}`, 'Heikin Ashi'];
-                          if (name === 'RSI' || name === 'macdLine' || name === 'macdSignal' || name === 'macdHistPos' || name === 'macdHistNeg') return []; 
-                          return [formatNumber(value), name];
-                        }}
-                      />
-                      
-                      {showFib && fibLevels && Object.entries(fibLevels).map(([key, val]) => (
-                        <ReferenceLine key={key} yAxisId="price" y={val} stroke={TV_COLORS.blue} strokeDasharray="3 3" strokeOpacity={0.4} label={{ position: 'insideTopLeft', value: `${(Number(key)*100).toFixed(1)}%`, fill: TV_COLORS.blue, fontSize: 10 }} />
-                      ))}
-                      
-                      {showAutoSR && autoSRLevels.map((lvl, idx) => (
-                        <ReferenceLine key={`sr-${idx}`} yAxisId="price" y={lvl.price} stroke={lvl.type === 'support' ? TV_COLORS.green : TV_COLORS.red} strokeDasharray="3 3" strokeOpacity={0.6} label={{ position: lvl.type === 'support' ? 'insideBottomLeft' : 'insideTopLeft', value: `${lvl.type === 'support' ? 'Support' : 'Resistance'}`, fill: lvl.type === 'support' ? TV_COLORS.green : TV_COLORS.red, fontSize: 10 }} />
-                      ))}
+                  
+                  {/* LAYER 1: VPVR OVERLAY (Rendered as a standard Recharts BarChart so Vercel can't strip it) */}
+                  {showVPVR && (
+                    <div className="absolute inset-0 z-0 opacity-50 pointer-events-none">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart layout="vertical" data={vpvrData} margin={{ top: 15, right: 75, left: 0, bottom: 30 }} barCategoryGap="0%">
+                          <XAxis type="number" hide reversed={true} domain={[0, dataMax => dataMax * 4]} /> {/* Limits width to 25% of screen */}
+                          <YAxis type="number" dataKey="priceLevel" domain={yDomain} allowDataOverflow={true} hide />
+                          <Bar dataKey="downVolume" stackId="a" fill={TV_COLORS.red} isAnimationActive={false} />
+                          <Bar dataKey="upVolume" stackId="a" fill={TV_COLORS.blue} isAnimationActive={false} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
 
-                      {/* BULLETPROOF REACT INSTANCE CLONING FOR VPVR */}
-                      <Customized component={<VpvrOverlay showVPVR={showVPVR} chartData={chartData} />} />
-                      
-                      {showVolume && <Bar yAxisId="volume" dataKey="volume" fill={TV_COLORS.blue} opacity={0.3} name="Volume" isAnimationActive={false} />}
-                      
-                      {showBollinger && (
-                        <>
-                          <Line yAxisId="price" type="monotone" dataKey="bbUpper" stroke="#787B86" strokeDasharray="3 3" dot={false} strokeWidth={1} name="BB Upper" isAnimationActive={false} />
-                          <Line yAxisId="price" type="monotone" dataKey="bbLower" stroke="#787B86" strokeDasharray="3 3" dot={false} strokeWidth={1} name="BB Lower" isAnimationActive={false} />
-                        </>
-                      )}
-                      
-                      {showSMA && <Line yAxisId="price" type="monotone" dataKey="sma" stroke="#00BCD4" dot={false} strokeWidth={1.5} name={`SMA (${smaPeriod})`} isAnimationActive={false} />}
-                      {showEMA && <Line yAxisId="price" type="monotone" dataKey="ema" stroke="#9C27B0" dot={false} strokeWidth={1.5} name={`EMA (${emaPeriod})`} isAnimationActive={false} />}
-                      {showVWAP && <Line yAxisId="price" type="monotone" dataKey="vwap" stroke={TV_COLORS.red} strokeDasharray="5 5" dot={false} strokeWidth={1.5} name="VWAP" isAnimationActive={false} /> }
-                      
-                      {chartType === 'line' && <Line yAxisId="price" type="monotone" dataKey="price" stroke={TV_COLORS.blue} dot={false} strokeWidth={2} name="Price Action" isAnimationActive={false} />}
-                      {chartType === 'candle' && <Bar yAxisId="price" dataKey="candleRange" shape={(props) => <CustomCandlestick {...props} />} name="Candles" isAnimationActive={false} />}
-                      {chartType === 'heikinAshi' && <Bar yAxisId="price" dataKey="haCandleRange" shape={(props) => <CustomCandlestick {...props} isHeikinAshi={true} />} name="Heikin Ashi" isAnimationActive={false} />}
-                    </ComposedChart>
-                  </ResponsiveContainer>
+                  {/* LAYER 2: MAIN CANDLESTICK CHART */}
+                  <div className="absolute inset-0 z-10">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={chartData} margin={{ top: 15, right: 0, left: 0, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#2A2E39" vertical={false} />
+                        
+                        <XAxis dataKey="time" height={30} stroke="#D1D4DC" tick={showRSI || showMACD ? false : { fill: '#D1D4DC', fontSize: 12, fontWeight: 500 }} tickMargin={10} minTickGap={30} axisLine={{ stroke: '#2A2E39' }} tickLine={false} />
+                        
+                        {/* Domain Lock keeps it perfectly aligned with VPVR */}
+                        <YAxis yAxisId="price" domain={yDomain} allowDataOverflow={true} stroke="#D1D4DC" tick={{ fill: '#D1D4DC', fontSize: 12, fontWeight: 500, fontFamily: 'monospace' }} tickFormatter={(val) => val.toLocaleString()} width={75} orientation="right" axisLine={false} tickLine={false} />
+                        <YAxis yAxisId="volume" orientation="left" domain={[0, 'auto']} hide={true} />
+                        
+                        <Tooltip 
+                          cursor={{ stroke: '#2A2E39', strokeWidth: 1, strokeDasharray: '4 4' }}
+                          contentStyle={{ backgroundColor: '#1E222D', borderColor: '#2A2E39', color: '#D1D4DC', borderRadius: '4px', padding: '8px', fontSize: '13px' }}
+                          itemStyle={{ color: '#D1D4DC', padding: '2px 0' }} labelStyle={{ color: '#787B86', marginBottom: '4px', fontSize: '12px' }}
+                          formatter={(value, name, props) => {
+                            if (name === 'Volume') return [Number(value || 0).toLocaleString(), name];
+                            if (name === 'Candles' || name === 'candleRange') return [`O: ${formatNumber(props.payload.open)} H: ${formatNumber(props.payload.high)} L: ${formatNumber(props.payload.low)} C: ${formatNumber(props.payload.close)}`, 'OHLC'];
+                            if (name === 'Heikin Ashi' || name === 'haCandleRange') return [`O: ${formatNumber(props.payload.haOpen)} H: ${formatNumber(props.payload.haHigh)} L: ${formatNumber(props.payload.haLow)} C: ${formatNumber(props.payload.haClose)}`, 'Heikin Ashi'];
+                            if (name === 'RSI' || name === 'macdLine' || name === 'macdSignal' || name === 'macdHistPos' || name === 'macdHistNeg') return []; 
+                            return [formatNumber(value), name];
+                          }}
+                        />
+                        
+                        {showFib && fibLevels && Object.entries(fibLevels).map(([key, val]) => (
+                          <ReferenceLine key={key} yAxisId="price" y={val} stroke={TV_COLORS.blue} strokeDasharray="3 3" strokeOpacity={0.4} label={{ position: 'insideTopLeft', value: `${(Number(key)*100).toFixed(1)}%`, fill: TV_COLORS.blue, fontSize: 10 }} />
+                        ))}
+                        
+                        {showAutoSR && autoSRLevels.map((lvl, idx) => (
+                          <ReferenceLine key={`sr-${idx}`} yAxisId="price" y={lvl.price} stroke={lvl.type === 'support' ? TV_COLORS.green : TV_COLORS.red} strokeDasharray="3 3" strokeOpacity={0.6} label={{ position: lvl.type === 'support' ? 'insideBottomLeft' : 'insideTopLeft', value: `${lvl.type === 'support' ? 'Support' : 'Resistance'}`, fill: lvl.type === 'support' ? TV_COLORS.green : TV_COLORS.red, fontSize: 10 }} />
+                        ))}
+                        
+                        {showVolume && <Bar yAxisId="volume" dataKey="volume" fill={TV_COLORS.blue} opacity={0.3} name="Volume" isAnimationActive={false} />}
+                        
+                        {showBollinger && (
+                          <>
+                            <Line yAxisId="price" type="monotone" dataKey="bbUpper" stroke="#787B86" strokeDasharray="3 3" dot={false} strokeWidth={1} name="BB Upper" isAnimationActive={false} />
+                            <Line yAxisId="price" type="monotone" dataKey="bbLower" stroke="#787B86" strokeDasharray="3 3" dot={false} strokeWidth={1} name="BB Lower" isAnimationActive={false} />
+                          </>
+                        )}
+                        
+                        {showSMA && <Line yAxisId="price" type="monotone" dataKey="sma" stroke="#00BCD4" dot={false} strokeWidth={1.5} name={`SMA (${smaPeriod})`} isAnimationActive={false} />}
+                        {showEMA && <Line yAxisId="price" type="monotone" dataKey="ema" stroke="#9C27B0" dot={false} strokeWidth={1.5} name={`EMA (${emaPeriod})`} isAnimationActive={false} />}
+                        {showVWAP && <Line yAxisId="price" type="monotone" dataKey="vwap" stroke={TV_COLORS.red} strokeDasharray="5 5" dot={false} strokeWidth={1.5} name="VWAP" isAnimationActive={false} /> }
+                        
+                        {chartType === 'line' && <Line yAxisId="price" type="monotone" dataKey="price" stroke={TV_COLORS.blue} dot={false} strokeWidth={2} name="Price Action" isAnimationActive={false} />}
+                        {chartType === 'candle' && <Bar yAxisId="price" dataKey="candleRange" shape={(props) => <CustomCandlestick {...props} />} name="Candles" isAnimationActive={false} />}
+                        {chartType === 'heikinAshi' && <Bar yAxisId="price" dataKey="haCandleRange" shape={(props) => <CustomCandlestick {...props} isHeikinAshi={true} />} name="Heikin Ashi" isAnimationActive={false} />}
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
                 </div>
 
                 {showRSI && (
@@ -720,8 +683,8 @@ function LiveCryptoDashboard() {
                     <ResponsiveContainer width="100%" height="100%">
                       <ComposedChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#2A2E39" vertical={false} />
-                        <XAxis dataKey="time" stroke="#D1D4DC" tick={showMACD ? false : { fill: '#D1D4DC', fontSize: 12, fontWeight: 600 }} tickMargin={10} minTickGap={30} axisLine={false} tickLine={false} />
-                        <YAxis domain={[0, 100]} stroke="#D1D4DC" tick={{ fill: '#D1D4DC', fontSize: 12, fontWeight: 600, fontFamily: 'monospace' }} width={75} orientation="right" ticks={[30, 50, 70]} axisLine={false} tickLine={false} />
+                        <XAxis dataKey="time" stroke="#D1D4DC" tick={showMACD ? false : { fill: '#D1D4DC', fontSize: 12, fontWeight: 500 }} tickMargin={10} minTickGap={30} axisLine={false} tickLine={false} />
+                        <YAxis domain={[0, 100]} stroke="#D1D4DC" tick={{ fill: '#D1D4DC', fontSize: 12, fontWeight: 500, fontFamily: 'monospace' }} width={75} orientation="right" ticks={[30, 50, 70]} axisLine={false} tickLine={false} />
                         <Tooltip contentStyle={{ backgroundColor: '#1E222D', borderColor: '#2A2E39' }} labelStyle={{ display: 'none' }} itemStyle={{ color: '#9C27B0', fontSize: '12px' }} formatter={(value) => [Number(value).toFixed(2), 'RSI']} />
                         <ReferenceLine y={70} stroke={TV_COLORS.red} strokeDasharray="3 3" strokeOpacity={0.5} />
                         <ReferenceLine y={30} stroke={TV_COLORS.green} strokeDasharray="3 3" strokeOpacity={0.5} />
@@ -736,8 +699,8 @@ function LiveCryptoDashboard() {
                     <ResponsiveContainer width="100%" height="100%">
                       <ComposedChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#2A2E39" vertical={false} />
-                        <XAxis dataKey="time" stroke="#D1D4DC" tick={{ fill: '#D1D4DC', fontSize: 12, fontWeight: 600 }} tickMargin={10} minTickGap={30} axisLine={false} tickLine={false} />
-                        <YAxis domain={['auto', 'auto']} stroke="#D1D4DC" tick={{ fill: '#D1D4DC', fontSize: 12, fontWeight: 600, fontFamily: 'monospace' }} width={75} orientation="right" axisLine={false} tickLine={false} />
+                        <XAxis dataKey="time" stroke="#D1D4DC" tick={{ fill: '#D1D4DC', fontSize: 12, fontWeight: 500 }} tickMargin={10} minTickGap={30} axisLine={false} tickLine={false} />
+                        <YAxis domain={['auto', 'auto']} stroke="#D1D4DC" tick={{ fill: '#D1D4DC', fontSize: 12, fontWeight: 500, fontFamily: 'monospace' }} width={75} orientation="right" axisLine={false} tickLine={false} />
                         <Tooltip contentStyle={{ backgroundColor: '#1E222D', borderColor: '#2A2E39' }} labelStyle={{ display: 'none' }} formatter={(value, name) => [Number(value).toFixed(2), name.replace('macd', '')]} />
                         <Bar dataKey="macdHistPos" stackId="a" fill={TV_COLORS.green} isAnimationActive={false} />
                         <Bar dataKey="macdHistNeg" stackId="a" fill={TV_COLORS.red} isAnimationActive={false} />

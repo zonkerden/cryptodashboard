@@ -30,10 +30,9 @@ import {
   TrendingDown
 } from 'lucide-react';
 
-// --- Universal API Router (Bypasses Regional/ISP Blocks) ---
 const fetchBinance = async (endpoint) => {
   const endpoints = [
-    'https://data-api.binance.vision', // Usually unblocked globally
+    'https://data-api.binance.vision', 
     'https://api1.binance.com',
     'https://api2.binance.com',
     'https://api3.binance.com',
@@ -93,7 +92,6 @@ const formatNumber = (num, minDec = 2, maxDec = 2) => {
   return Number(num).toLocaleString(undefined, { minimumFractionDigits: minDec, maximumFractionDigits: maxDec });
 };
 
-// TradingView Color Palette
 const TV_COLORS = {
   bg: '#131722',
   panel: '#1E222D',
@@ -256,76 +254,45 @@ const calculateAutoSR = (data) => {
   return grouped.sort((a,b) => b.weight - a.weight).slice(0, 5);
 };
 
-const TIMEFRAMES = {
-  'LIVE': { label: 'Live', interval: '1m', limit: 100 },
-  '1M': { label: '1M', interval: '4h', limit: 180 },
-  '6M': { label: '6M', interval: '1d', limit: 180 },
-  '1Y': { label: '1Y', interval: '1d', limit: 365 },
-  '5Y': { label: '5Y', interval: '1w', limit: 260 },
-};
-
-const COIN_CONFIG = {
-  'BTCUSDT': { label: 'BTC', name: 'Bitcoin', color: '#F7931A' },
-  'ETHUSDT': { label: 'ETH', name: 'Ethereum', color: '#627EEA' },
-  'SOLUSDT': { label: 'SOL', name: 'Solana', color: '#14F195' }
-};
-
-const formatTime = (timestamp, tf) => {
-  if (!timestamp) return '';
-  const date = new Date(timestamp);
-  if (tf === 'LIVE') return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  if (tf === '1M') return date.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit' });
-  if (tf === '5Y') return date.toLocaleDateString([], { year: 'numeric', month: 'short' });
-  return date.toLocaleDateString([], { year: '2-digit', month: 'short', day: 'numeric' });
-};
-
-// Sleek Toggle Switch
-const ToggleSwitch = ({ checked, onChange, colorClass }) => (
-  <label className="flex items-center cursor-pointer">
-    <div className="relative">
-      <input type="checkbox" checked={checked} onChange={onChange} className="sr-only" />
-      <div className={`w-8 h-4 rounded-full transition-colors duration-300 ease-in-out ${checked ? colorClass : 'bg-[#2A2E39]'}`}></div>
-      <div className={`absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full transition-transform duration-300 ease-in-out ${checked ? 'transform translate-x-4' : ''}`}></div>
-    </div>
-  </label>
-);
-
-const IndicatorRow = ({ label, checked, onChange, colorClass, isPro }) => (
-  <div className="flex items-center justify-between py-1.5 hover:bg-[#2A2E39]/30 px-2 rounded -mx-2 transition-colors">
-    <div className="flex items-center gap-3">
-      <ToggleSwitch checked={checked} onChange={onChange} colorClass={colorClass} />
-      <span className={`text-[13px] font-medium ${checked ? 'text-[#D1D4DC]' : 'text-[#787B86]'}`}>
-        {label} {isPro && <span className={checked ? colorClass.replace('bg-', 'text-') : 'text-[#787B86]'}>(Pro)</span>}
-      </span>
-    </div>
-  </div>
-);
-
-// We extract VPVR into a standalone component outside the main function so Vercel's minifier cannot break it
+// The fully decoupled, Vercel-Proof VPVR Component
 const VpvrOverlay = (props) => {
-  const { showVPVR, chartData, yAxisMap, offset } = props;
+  const { showVPVR, chartData, offset } = props;
   
-  if (!showVPVR || !chartData || chartData.length === 0) return null;
+  if (!showVPVR || !chartData || chartData.length === 0 || !offset) return null;
+
+  // 1. DYNAMIC SCALE FINDER: Bypasses Vercel minification of 'yAxisMap'
+  let yScale = null;
+  if (props.yAxisMap && props.yAxisMap.price && typeof props.yAxisMap.price.scale === 'function') {
+    yScale = props.yAxisMap.price.scale;
+  } else {
+    // If minified, actively hunt for the scale function inside the props object
+    const maps = Object.values(props).filter(val => val && typeof val === 'object');
+    for (const map of maps) {
+      const axes = Object.values(map);
+      for (const axis of axes) {
+        if (axis && typeof axis.scale === 'function') {
+          yScale = axis.scale;
+          break;
+        }
+      }
+      if (yScale) break;
+    }
+  }
+
+  if (!yScale) return null; // Failsafe if scale still can't be found
   
-  // Safely extract the yAxis scale generated internally by Recharts
-  const yAxis = yAxisMap?.price || yAxisMap?.[Object.keys(yAxisMap || {})[0]];
-  if (!yAxis || !yAxis.scale || !offset) return null;
-  
-  const yScale = yAxis.scale;
+  // 2. GENERATE VOLUME BINS
   const binsCount = 50;
+  let minPrice = Math.min(...chartData.map(d => d.low !== undefined ? d.low : (d.price || 0)));
+  let maxPrice = Math.max(...chartData.map(d => d.high !== undefined ? d.high : (d.price || 0)));
   
-  // Find min and max visible prices to create Volume Bins
-  let minPrice = Math.min(...chartData.map(d => d.low !== undefined ? d.low : d.price));
-  let maxPrice = Math.max(...chartData.map(d => d.high !== undefined ? d.high : d.price));
-  
-  if (minPrice === maxPrice || !isFinite(minPrice) || !isFinite(maxPrice)) return null;
+  if (minPrice >= maxPrice || !isFinite(minPrice) || !isFinite(maxPrice)) return null;
   
   const binSize = (maxPrice - minPrice) / binsCount;
   const bins = Array.from({ length: binsCount }, (_, i) => ({
     top: minPrice + ((i + 1) * binSize), bottom: minPrice + (i * binSize), volume: 0, upVolume: 0, downVolume: 0
   }));
   
-  // Distribute volume into bins based on typical price
   chartData.forEach(d => {
     const typPrice = d.candleRange ? (d.candleRange[0] + d.candleRange[1] + (d.close || d.price)) / 3 : d.price;
     const vol = d.volume || 0;
@@ -344,9 +311,8 @@ const VpvrOverlay = (props) => {
   const maxVol = Math.max(...bins.map(b => b.volume));
   if (maxVol <= 0 || !isFinite(maxVol)) return null;
   
-  // Define maximum width of the VPVR overlay (25% of the chart width)
   const maxBarWidth = offset.width * 0.25; 
-  const startX = offset.left + offset.width; // Anchor to the right side of the chart area
+  const startX = offset.left + offset.width; 
 
   return (
     <g className="vpvr-layer">
@@ -372,6 +338,50 @@ const VpvrOverlay = (props) => {
     </g>
   );
 };
+
+const TIMEFRAMES = {
+  'LIVE': { label: 'Live', interval: '1m', limit: 100 },
+  '1M': { label: '1M', interval: '4h', limit: 180 },
+  '6M': { label: '6M', interval: '1d', limit: 180 },
+  '1Y': { label: '1Y', interval: '1d', limit: 365 },
+  '5Y': { label: '5Y', interval: '1w', limit: 260 },
+};
+
+const COIN_CONFIG = {
+  'BTCUSDT': { label: 'BTC', name: 'Bitcoin', color: '#F7931A' },
+  'ETHUSDT': { label: 'ETH', name: 'Ethereum', color: '#627EEA' },
+  'SOLUSDT': { label: 'SOL', name: 'Solana', color: '#14F195' }
+};
+
+const formatTime = (timestamp, tf) => {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  if (tf === 'LIVE') return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (tf === '1M') return date.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit' });
+  if (tf === '5Y') return date.toLocaleDateString([], { year: 'numeric', month: 'short' });
+  return date.toLocaleDateString([], { year: '2-digit', month: 'short', day: 'numeric' });
+};
+
+const ToggleSwitch = ({ checked, onChange, colorClass }) => (
+  <label className="flex items-center cursor-pointer">
+    <div className="relative">
+      <input type="checkbox" checked={checked} onChange={onChange} className="sr-only" />
+      <div className={`w-8 h-4 rounded-full transition-colors duration-300 ease-in-out ${checked ? colorClass : 'bg-[#2A2E39]'}`}></div>
+      <div className={`absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full transition-transform duration-300 ease-in-out ${checked ? 'transform translate-x-4' : ''}`}></div>
+    </div>
+  </label>
+);
+
+const IndicatorRow = ({ label, checked, onChange, colorClass, isPro }) => (
+  <div className="flex items-center justify-between py-1.5 hover:bg-[#2A2E39]/30 px-2 rounded -mx-2 transition-colors">
+    <div className="flex items-center gap-3">
+      <ToggleSwitch checked={checked} onChange={onChange} colorClass={colorClass} />
+      <span className={`text-[13px] font-medium ${checked ? 'text-[#D1D4DC]' : 'text-[#787B86]'}`}>
+        {label} {isPro && <span className={checked ? colorClass.replace('bg-', 'text-') : 'text-[#787B86]'}>(Pro)</span>}
+      </span>
+    </div>
+  </div>
+);
 
 function LiveCryptoDashboard() {
   const [selectedPair, setSelectedPair] = useState('BTCUSDT');
@@ -402,7 +412,6 @@ function LiveCryptoDashboard() {
   const smaPeriod = 14;
   const emaPeriod = 9;
 
-  // Sentiment & News Fetch
   useEffect(() => {
     let isMounted = true;
     fetch('https://api.alternative.me/fng/')
@@ -425,7 +434,6 @@ function LiveCryptoDashboard() {
     return () => { isMounted = false; };
   }, []);
 
-  // Tickers Fetch (Using unblocked fetchBinance)
   useEffect(() => {
     let isMounted = true;
     const fetchTickers = async () => {
@@ -447,7 +455,6 @@ function LiveCryptoDashboard() {
     return () => { isMounted = false; clearInterval(interval); };
   }, []);
 
-  // Order Book & Trades Polling (Using unblocked fetchBinance)
   useEffect(() => {
     let isMounted = true;
     let fallbackInterval = setInterval(async () => {
@@ -478,7 +485,6 @@ function LiveCryptoDashboard() {
     return () => { isMounted = false; clearInterval(fallbackInterval); };
   }, [selectedPair]);
 
-  // Main Chart Data Polling (Using unblocked fetchBinance)
   useEffect(() => {
     let pollInterval = null;
     let isMounted = true;
@@ -568,14 +574,13 @@ function LiveCryptoDashboard() {
   return (
     <div className="h-screen w-screen bg-[#131722] text-[#D1D4DC] flex flex-col overflow-hidden font-sans selection:bg-[#2962FF]/30">
       
-      {/* 1. TOP HEADER (Navbar) */}
+      {/* TOP HEADER */}
       <header className="h-14 border-b border-[#2A2E39] bg-[#1E222D] flex items-center justify-between px-4 shrink-0 z-20">
         <div className="flex items-center gap-3">
           <div className="bg-[#2962FF] p-1.5 rounded text-white"><TrendingUp size={20} strokeWidth={2.5} /></div>
           <span className="font-bold text-lg tracking-tight text-white hidden sm:block">Crypto<span className="text-[#2962FF]">Terminal</span></span>
         </div>
         
-        {/* Ticker Overview */}
         <div className="flex items-center gap-6 text-sm">
           {Object.keys(COIN_CONFIG).map(pair => {
             const t = tickers[pair];
@@ -591,7 +596,6 @@ function LiveCryptoDashboard() {
           })}
         </div>
 
-        {/* Status */}
         <div className="flex items-center gap-3">
           {wsStatus === 'connected' ? (
              <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-[#089981]/10 text-[#089981] text-[11px] font-bold tracking-wide">
@@ -609,13 +613,10 @@ function LiveCryptoDashboard() {
         </div>
       </header>
 
-      {/* 2. MAIN LAYOUT (Flex-1) */}
       <div className="flex-1 flex min-h-0">
         
-        {/* LEFT COLUMN: Chart + Sub-toolbar + Bottom News */}
         <div className="flex-1 flex flex-col min-w-0 bg-[#131722] border-r border-[#2A2E39]">
           
-          {/* Sub-toolbar (Chart Controls) */}
           <div className="h-12 border-b border-[#2A2E39] flex items-center px-4 gap-4 shrink-0 overflow-x-auto [&::-webkit-scrollbar]:hidden">
             <div className="flex bg-[#1E222D] rounded p-0.5">
               {Object.keys(COIN_CONFIG).map(coinKey => (
@@ -640,7 +641,6 @@ function LiveCryptoDashboard() {
             </div>
           </div>
 
-          {/* Actual Chart Container */}
           <div className="flex-1 flex flex-col relative min-h-0">
             {loading ? (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-[#787B86] z-20">
@@ -649,7 +649,6 @@ function LiveCryptoDashboard() {
               </div>
             ) : (
               <>
-                {/* Main Price Chart */}
                 <div className="flex-1 w-full min-h-[250px] relative">
                   <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart data={chartData} margin={{ top: 15, right: 0, left: 0, bottom: 0 }}>
@@ -679,7 +678,7 @@ function LiveCryptoDashboard() {
                         <ReferenceLine key={`sr-${idx}`} yAxisId="price" y={lvl.price} stroke={lvl.type === 'support' ? TV_COLORS.green : TV_COLORS.red} strokeDasharray="3 3" strokeOpacity={0.6} label={{ position: lvl.type === 'support' ? 'insideBottomLeft' : 'insideTopLeft', value: `${lvl.type === 'support' ? 'Support' : 'Resistance'}`, fill: lvl.type === 'support' ? TV_COLORS.green : TV_COLORS.red, fontSize: 10 }} />
                       ))}
 
-                      {/* Explicitly pass coordinates to VPVR via Render Prop Function for Vercel production safety */}
+                      {/* Standalone VPVR Injector mapped to internal Recharts Props safely */}
                       <Customized component={(rechartsProps) => <VpvrOverlay {...rechartsProps} showVPVR={showVPVR} chartData={chartData} />} />
                       
                       {showVolume && <Bar yAxisId="volume" dataKey="volume" fill={TV_COLORS.blue} opacity={0.3} name="Volume" isAnimationActive={false} />}
@@ -702,7 +701,6 @@ function LiveCryptoDashboard() {
                   </ResponsiveContainer>
                 </div>
 
-                {/* Subcharts: RSI */}
                 {showRSI && (
                   <div className="w-full h-32 shrink-0 border-t border-[#2A2E39] pt-2">
                     <ResponsiveContainer width="100%" height="100%">
@@ -719,7 +717,6 @@ function LiveCryptoDashboard() {
                   </div>
                 )}
                 
-                {/* Subcharts: MACD */}
                 {showMACD && (
                   <div className="w-full h-32 shrink-0 border-t border-[#2A2E39] pt-2">
                     <ResponsiveContainer width="100%" height="100%">
@@ -740,7 +737,6 @@ function LiveCryptoDashboard() {
             )}
           </div>
 
-          {/* Bottom Pane: Market News horizontally scrolling */}
           <div className="h-44 border-t border-[#2A2E39] bg-[#1E222D] p-3 flex flex-col shrink-0">
             <h3 className="text-[13px] font-bold text-[#D1D4DC] flex items-center gap-2 mb-3 px-1">
               <Newspaper size={14} className="text-[#2962FF]" /> Top Headlines
@@ -763,10 +759,8 @@ function LiveCryptoDashboard() {
           </div>
         </div>
 
-        {/* RIGHT COLUMN: Sidebar (Details, DOM, Trades, Settings) */}
         <aside className="w-80 lg:w-96 flex flex-col bg-[#1E222D] shrink-0 z-10 overflow-y-auto [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:bg-[#2A2E39]">
           
-          {/* Section 1: Top Asset Header */}
           <div className="p-4 border-b border-[#2A2E39]">
             <div className="flex justify-between items-start mb-2">
               <div className="flex items-center gap-2">
@@ -786,7 +780,6 @@ function LiveCryptoDashboard() {
               </div>
             </div>
             
-            {/* Quick Sentiment Bar */}
             {fngData && (
               <div className="mt-3 bg-[#131722] rounded p-2 flex items-center justify-between border border-[#2A2E39]">
                 <span className="text-[11px] font-bold text-[#787B86] uppercase">Sentiment</span>
@@ -800,7 +793,6 @@ function LiveCryptoDashboard() {
             )}
           </div>
 
-          {/* Section 2: Order Book (DOM) */}
           <div className="p-4 border-b border-[#2A2E39] flex flex-col h-72">
              <h3 className="text-[13px] font-bold text-[#D1D4DC] flex items-center gap-2 mb-3">
               <Layers size={14} className="text-[#787B86]" /> Order Book (DOM)
@@ -811,7 +803,6 @@ function LiveCryptoDashboard() {
                   <span className="text-right">Size</span>
                   <span className="text-right">Total</span>
                 </div>
-                {/* Asks */}
                 <div className="flex flex-col-reverse justify-end flex-1 overflow-hidden">
                   {orderBook.asks.slice(0, 7).map((ask, i) => (
                     <div key={`ask-${i}`} className="grid grid-cols-3 relative py-[3px] z-10 hover:bg-[#2A2E39]/50 transition-colors">
@@ -822,12 +813,10 @@ function LiveCryptoDashboard() {
                     </div>
                   ))}
                 </div>
-                {/* Spread */}
                 <div className="py-2 flex items-center justify-between text-[13px] font-bold bg-[#131722] px-2 rounded my-1 border border-[#2A2E39]">
                   <span style={{color: selectedTicker.change >= 0 ? TV_COLORS.green : TV_COLORS.red}}>{formatNumber(selectedTicker.price, 2, 2)}</span>
                   {selectedTicker.change >= 0 ? <TrendingUp size={14} color={TV_COLORS.green}/> : <TrendingDown size={14} color={TV_COLORS.red}/>}
                 </div>
-                {/* Bids */}
                 <div className="flex flex-col flex-1 overflow-hidden">
                   {orderBook.bids.slice(0, 7).map((bid, i) => (
                     <div key={`bid-${i}`} className="grid grid-cols-3 relative py-[3px] z-10 hover:bg-[#2A2E39]/50 transition-colors">
@@ -841,7 +830,6 @@ function LiveCryptoDashboard() {
              </div>
           </div>
 
-          {/* Section 3: Recent Trades (Time & Sales) */}
           <div className="p-4 border-b border-[#2A2E39] flex flex-col h-48 shrink-0">
              <h3 className="text-[13px] font-bold text-[#D1D4DC] flex items-center gap-2 mb-3">
               <List size={14} className="text-[#787B86]" /> Recent Trades
@@ -864,7 +852,6 @@ function LiveCryptoDashboard() {
              </div>
           </div>
 
-          {/* Section 4: Indicator Toggles */}
           <div className="p-4 flex-1">
              <h3 className="text-[13px] font-bold text-[#D1D4DC] flex items-center gap-2 mb-3">
               <Settings size={14} className="text-[#787B86]" /> Chart Studies

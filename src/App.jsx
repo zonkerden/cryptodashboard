@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   ResponsiveContainer, 
   ComposedChart,
@@ -20,7 +20,11 @@ import {
   List,
   Layers,
   Settings,
-  TrendingDown
+  TrendingDown,
+  Bot,
+  Wallet,
+  History,
+  BrainCircuit
 } from 'lucide-react';
 
 // --- Universal API Router (Bypasses ISP Blocks) ---
@@ -304,6 +308,7 @@ function LiveCryptoDashboard() {
   const [wsStatus, setWsStatus] = useState('connecting'); 
   const [fngData, setFngData] = useState(null);
   const [newsData, setNewsData] = useState([]);
+  const [bottomTab, setBottomTab] = useState('bot'); 
   
   const [recentTrades, setRecentTrades] = useState([]);
   const [orderBook, setOrderBook] = useState({ bids: [], asks: [], maxVol: 0 });
@@ -323,6 +328,56 @@ function LiveCryptoDashboard() {
   
   const smaPeriod = 14;
   const emaPeriod = 9;
+
+  // Paper Trading State
+  const [portfolio, setPortfolio] = useState(() => {
+    const saved = localStorage.getItem('crypto_paper_portfolio');
+    return saved ? JSON.parse(saved) : { USDT: 10000, BTC: 0, ETH: 0, SOL: 0 };
+  });
+  
+  const [tradeHistory, setTradeHistory] = useState(() => {
+    const saved = localStorage.getItem('crypto_paper_history');
+    return saved ? JSON.parse(saved) : [];
+  });
+  
+  const [isBotActive, setIsBotActive] = useState(false);
+  const lastBotTradeRef = useRef(0);
+
+  // Sync Paper Trading to Local Storage
+  useEffect(() => {
+    localStorage.setItem('crypto_paper_portfolio', JSON.stringify(portfolio));
+  }, [portfolio]);
+
+  useEffect(() => {
+    localStorage.setItem('crypto_paper_history', JSON.stringify(tradeHistory));
+  }, [tradeHistory]);
+
+  const executeTrade = (action) => {
+    if (data.length === 0) return;
+    const currentPrice = data[data.length - 1].price;
+    const coin = selectedPair.replace('USDT', '');
+    const tradeSizeUSDT = Math.min(1000, portfolio.USDT); // Hardcode $1000 order size
+
+    if (action === 'BUY') {
+      if (portfolio.USDT < 10) return; // Insufficient funds
+      const qty = tradeSizeUSDT / currentPrice;
+      
+      setPortfolio(p => ({ ...p, USDT: p.USDT - tradeSizeUSDT, [coin]: (p[coin] || 0) + qty }));
+      setTradeHistory(h => [{ 
+        id: Date.now(), type: 'BUY', pair: selectedPair, price: currentPrice, qty, total: tradeSizeUSDT, time: Date.now(), bot: isBotActive 
+      }, ...h].slice(0, 50));
+      
+    } else if (action === 'SELL') {
+      if (!portfolio[coin] || portfolio[coin] <= 0) return; // Nothing to sell
+      const qty = portfolio[coin]; // Sell entire holding of this coin
+      const total = qty * currentPrice;
+      
+      setPortfolio(p => ({ ...p, USDT: p.USDT + total, [coin]: 0 }));
+      setTradeHistory(h => [{ 
+        id: Date.now(), type: 'SELL', pair: selectedPair, price: currentPrice, qty, total, time: Date.now(), bot: isBotActive 
+      }, ...h].slice(0, 50));
+    }
+  };
 
   // Initial Fetches (Sentiment, News, Tickers)
   useEffect(() => {
@@ -467,9 +522,9 @@ function LiveCryptoDashboard() {
     return processed;
   }, [data, smaPeriod, emaPeriod]);
 
-  // Strict Y-Axis Domain Lock (Forces absolute synchronization)
+  // Strict Y-Axis Domain Lock (Forces absolute synchronization for VPVR)
   const yDomain = useMemo(() => {
-    if (!chartData || chartData.length === 0) return [0, 100000]; // Safe numerical fallback
+    if (!chartData || chartData.length === 0) return [0, 100000]; 
     const prices = chartData.flatMap(d => [d.low !== undefined ? d.low : d.price, d.high !== undefined ? d.high : d.price]);
     const min = Math.min(...prices);
     const max = Math.max(...prices);
@@ -478,10 +533,15 @@ function LiveCryptoDashboard() {
     return [min - padding, max + padding];
   }, [chartData]);
 
-  // VPVR Array Generation
+  const autoSRLevels = useMemo(() => {
+    if (!data || data.length === 0) return [];
+    return calculateAutoSR(data);
+  }, [data]);
+
+  // VPVR Array Generation (calculated unconditionally for the bot to read)
   const vpvrData = useMemo(() => {
-    if (!showVPVR || !chartData || chartData.length === 0 || yDomain[0] === 0) return [];
-    const binsCount = 60; // Smooth resolution
+    if (!chartData || chartData.length === 0 || yDomain[0] === 0) return [];
+    const binsCount = 60; 
     const [minPrice, maxPrice] = yDomain;
     const binSize = (maxPrice - minPrice) / binsCount;
 
@@ -508,7 +568,69 @@ function LiveCryptoDashboard() {
     });
 
     return bins;
-  }, [chartData, showVPVR, yDomain]);
+  }, [chartData, yDomain]);
+
+  const botAnalysis = useMemo(() => {
+    if (!chartData || chartData.length === 0) return { score: 0, signals: [] };
+    const latest = chartData[chartData.length - 1];
+    const currentPrice = latest.price;
+    
+    let score = 0;
+    let signals = [];
+
+    // 1. RSI (Momentum)
+    if (latest.rsi) {
+      if (latest.rsi < 40) { score += 1; signals.push('RSI < 40'); }
+      else if (latest.rsi > 60) { score -= 1; signals.push('RSI > 60'); }
+    }
+
+    // 2. VWAP (Trend)
+    if (latest.vwap) {
+      if (currentPrice > latest.vwap) { score += 1; signals.push('Price > VWAP'); }
+      else if (currentPrice < latest.vwap) { score -= 1; signals.push('Price < VWAP'); }
+    }
+
+    // 3. Auto S/R (Structure)
+    if (autoSRLevels && autoSRLevels.length > 0) {
+      const supports = autoSRLevels.filter(l => l.type === 'support').map(l => l.price);
+      const resistances = autoSRLevels.filter(l => l.type === 'resistance').map(l => l.price);
+      
+      const nearestSupport = supports.length ? Math.max(...supports.filter(s => s < currentPrice)) : null;
+      const nearestResistance = resistances.length ? Math.min(...resistances.filter(r => r > currentPrice)) : null;
+
+      if (nearestSupport && (currentPrice - nearestSupport) / nearestSupport < 0.005) { score += 1; signals.push('At Support'); }
+      if (nearestResistance && (nearestResistance - currentPrice) / nearestResistance < 0.005) { score -= 1; signals.push('At Resistance'); }
+    }
+
+    // 4. VPVR (Volume Nodes)
+    if (vpvrData && vpvrData.length > 0) {
+      const pocBin = vpvrData.reduce((max, bin) => (bin.volume > (max?.volume || 0) ? bin : max), vpvrData[0]);
+      if (pocBin && pocBin.volume > 0) {
+         if (currentPrice >= pocBin.priceLevel && (currentPrice - pocBin.priceLevel)/pocBin.priceLevel < 0.005) { score += 1; signals.push('POC Support'); }
+         else if (currentPrice < pocBin.priceLevel && (pocBin.priceLevel - currentPrice)/pocBin.priceLevel < 0.005) { score -= 1; signals.push('POC Resistance'); }
+      }
+    }
+
+    return { score, signals };
+  }, [chartData, autoSRLevels, vpvrData]);
+
+  // Run the Confluence Auto-Bot
+  useEffect(() => {
+    if (!isBotActive || chartData.length === 0) return;
+    
+    const now = Date.now();
+    // 60 second cooldown to prevent bot spam on the same candle
+    if (now - lastBotTradeRef.current < 60000) return; 
+
+    if (botAnalysis.score >= 2) {
+      executeTrade('BUY');
+      lastBotTradeRef.current = now;
+    } else if (botAnalysis.score <= -2) {
+      executeTrade('SELL');
+      lastBotTradeRef.current = now;
+    }
+  }, [botAnalysis.score, isBotActive, portfolio, chartData.length]);
+
 
   const fibLevels = useMemo(() => {
     if (!showFib || !data || data.length === 0) return null;
@@ -521,14 +643,22 @@ function LiveCryptoDashboard() {
     return { 0: high, 0.236: high - diff * 0.236, 0.382: high - diff * 0.382, 0.5: high - diff * 0.5, 0.618: high - diff * 0.618, 1: low };
   }, [data, showFib]);
 
-  const autoSRLevels = useMemo(() => {
-    if (!showAutoSR || !data || data.length === 0) return [];
-    return calculateAutoSR(data);
-  }, [data, showAutoSR]);
-
   const selectedTicker = tickers[selectedPair] || {};
   const currentPrice = chartData.length > 0 ? chartData[chartData.length - 1].price : 0;
   
+  const totalPortfolioValue = useMemo(() => {
+    let total = portfolio.USDT;
+    Object.keys(COIN_CONFIG).forEach(pair => {
+      const coin = pair.replace('USDT', '');
+      if (portfolio[coin] && tickers[pair]) {
+        total += portfolio[coin] * tickers[pair].price;
+      }
+    });
+    return total;
+  }, [portfolio, tickers]);
+
+  const pnlPercent = ((totalPortfolioValue - 10000) / 10000) * 100;
+
   return (
     <div className="h-screen w-screen bg-[#131722] text-[#D1D4DC] flex flex-col overflow-hidden font-sans selection:bg-[#2962FF]/30">
       
@@ -575,6 +705,7 @@ function LiveCryptoDashboard() {
         
         <div className="flex-1 flex flex-col min-w-0 bg-[#131722] border-r border-[#2A2E39]">
           
+          {/* CHART CONTROLS */}
           <div className="h-12 border-b border-[#2A2E39] flex items-center px-4 gap-4 shrink-0 overflow-x-auto [&::-webkit-scrollbar]:hidden">
             <div className="flex bg-[#1E222D] rounded p-0.5">
               {Object.keys(COIN_CONFIG).map(coinKey => (
@@ -599,6 +730,7 @@ function LiveCryptoDashboard() {
             </div>
           </div>
 
+          {/* MAIN CHART AREA */}
           <div className="flex-1 flex flex-col relative min-h-0">
             {loading ? (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-[#787B86] z-20">
@@ -607,15 +739,13 @@ function LiveCryptoDashboard() {
               </div>
             ) : (
               <>
-                {/* BULLETPROOF DUAL-CHART ARCHITECTURE */}
                 <div className="flex-1 w-full min-h-[250px] relative">
                   
-                  {/* LAYER 1: VPVR OVERLAY (Rendered purely with public Recharts API components to bypass Vercel Minification) */}
+                  {/* VPVR OVERLAY (Back Layer - Vercel Safe) */}
                   {showVPVR && (
                     <div className="absolute top-[15px] bottom-[30px] left-0 right-[75px] z-0 opacity-40 pointer-events-none flex justify-end">
                       <div className="w-[35%] h-full">
                         <ResponsiveContainer width="100%" height="100%">
-                          {/* We use margin:0 here because the absolute container above perfectly maps to the main chart's drawing area */}
                           <BarChart layout="vertical" data={vpvrData} margin={{ top: 0, right: 0, left: 0, bottom: 0 }} barCategoryGap={0}>
                             <XAxis type="number" hide reversed={true} domain={[0, 'dataMax']} />
                             <YAxis type="number" dataKey="priceLevel" domain={yDomain} hide />
@@ -627,7 +757,7 @@ function LiveCryptoDashboard() {
                     </div>
                   )}
 
-                  {/* LAYER 2: MAIN CANDLESTICK CHART */}
+                  {/* CANDLESTICK OVERLAY (Front Layer) */}
                   <div className="absolute inset-0 z-10">
                     <ResponsiveContainer width="100%" height="100%">
                       <ComposedChart data={chartData} margin={{ top: 15, right: 0, left: 0, bottom: 0 }}>
@@ -635,7 +765,6 @@ function LiveCryptoDashboard() {
                         
                         <XAxis dataKey="time" height={30} stroke="#D1D4DC" tick={showRSI || showMACD ? false : { fill: '#D1D4DC', fontSize: 12, fontWeight: 500 }} tickMargin={10} minTickGap={30} axisLine={{ stroke: '#2A2E39' }} tickLine={false} />
                         
-                        {/* Domain Lock keeps it perfectly aligned with VPVR */}
                         <YAxis yAxisId="price" domain={yDomain} allowDataOverflow={true} stroke="#D1D4DC" tick={{ fill: '#D1D4DC', fontSize: 12, fontWeight: 500, fontFamily: 'monospace' }} tickFormatter={(val) => val.toLocaleString()} width={75} orientation="right" axisLine={false} tickLine={false} />
                         <YAxis yAxisId="volume" orientation="left" domain={[0, 'auto']} hide={true} />
                         
@@ -718,23 +847,98 @@ function LiveCryptoDashboard() {
             )}
           </div>
 
-          <div className="h-44 border-t border-[#2A2E39] bg-[#1E222D] p-3 flex flex-col shrink-0">
-            <h3 className="text-[13px] font-bold text-[#D1D4DC] flex items-center gap-2 mb-3 px-1">
-              <Newspaper size={14} className="text-[#2962FF]" /> Top Headlines
-            </h3>
-            <div className="flex-1 flex gap-4 overflow-x-auto [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-thumb]:bg-[#2A2E39] [&::-webkit-scrollbar-track]:bg-transparent pb-2">
-              {newsData.length > 0 ? newsData.map(article => (
-                <a key={article.id} href={article.url} target="_blank" rel="noopener noreferrer" className="w-72 shrink-0 bg-[#131722] border border-[#2A2E39] rounded p-3 hover:border-[#787B86] transition-colors flex flex-col justify-between">
-                  <div>
-                    <div className="text-[10px] text-[#2962FF] font-bold uppercase tracking-wider mb-1.5">{article.source}</div>
-                    <h4 className="text-[13px] text-[#D1D4DC] leading-snug line-clamp-2 hover:text-white transition-colors">{article.title}</h4>
+          <div className="h-64 border-t border-[#2A2E39] bg-[#1E222D] flex flex-col shrink-0">
+            <div className="flex items-center gap-4 px-4 pt-3 pb-2 border-b border-[#2A2E39]">
+              <button onClick={() => setBottomTab('bot')} className={`flex items-center gap-2 text-[13px] font-bold ${bottomTab === 'bot' ? 'text-[#2962FF]' : 'text-[#787B86] hover:text-[#D1D4DC]'}`}>
+                <Bot size={14} /> Paper Trading & Confluence Bot
+              </button>
+              <button onClick={() => setBottomTab('news')} className={`flex items-center gap-2 text-[13px] font-bold ${bottomTab === 'news' ? 'text-[#2962FF]' : 'text-[#787B86] hover:text-[#D1D4DC]'}`}>
+                <Newspaper size={14} /> Top Headlines
+              </button>
+            </div>
+            
+            <div className="flex-1 flex overflow-hidden">
+              {bottomTab === 'bot' ? (
+                <div className="flex-1 flex min-w-0">
+                  {/* Left: Portfolio Balance */}
+                  <div className="w-1/3 p-4 border-r border-[#2A2E39] flex flex-col justify-center">
+                    <div className="text-[11px] font-bold text-[#787B86] uppercase mb-1 flex items-center gap-1.5"><Wallet size={12}/> Est. Portfolio Value</div>
+                    <div className="text-2xl font-mono font-bold text-white mb-2">${totalPortfolioValue.toFixed(2)}</div>
+                    <div className={`text-[12px] font-bold mb-4 ${pnlPercent >= 0 ? 'text-[#089981]' : 'text-[#F23645]'}`}>
+                      {pnlPercent >= 0 ? '+' : ''}{pnlPercent.toFixed(2)}% All Time
+                    </div>
+                    
+                    <div className="space-y-1.5 font-mono text-[12px]">
+                      <div className="flex justify-between"><span className="text-[#787B86]">USDT (Cash)</span><span className="text-[#D1D4DC]">{portfolio.USDT.toFixed(2)}</span></div>
+                      {Object.keys(COIN_CONFIG).map(pair => {
+                        const coin = pair.replace('USDT', '');
+                        if (portfolio[coin] > 0) return <div key={coin} className="flex justify-between"><span className="text-[#787B86]">{coin}</span><span className="text-[#D1D4DC]">{portfolio[coin].toFixed(4)}</span></div>
+                        return null;
+                      })}
+                    </div>
                   </div>
-                  <div className="text-[11px] text-[#787B86] flex items-center gap-1.5 mt-2">
-                    <Clock size={12} /> {new Date(article.time * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
+
+                  {/* Middle: Bot Controls & Signal Score */}
+                  <div className="w-1/3 p-4 border-r border-[#2A2E39] flex flex-col justify-center">
+                    <div className="bg-[#131722] border border-[#2A2E39] rounded p-3 mb-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[13px] font-bold text-white flex items-center gap-2"><BrainCircuit size={14} className={isBotActive ? "text-[#089981]" : "text-[#787B86]"} /> Confluence Algo</span>
+                        <ToggleSwitch checked={isBotActive} onChange={(e) => setIsBotActive(e.target.checked)} colorClass="bg-[#089981]" />
+                      </div>
+                      <p className="text-[11px] text-[#787B86] leading-tight mb-2">Scores RSI, VWAP, S/R, and VPVR to find confluence. Triggers on +2 or -2.</p>
+                      
+                      <div className="flex items-center justify-between bg-[#1E222D] p-1.5 rounded border border-[#2A2E39]">
+                        <span className="text-[11px] font-bold text-[#D1D4DC] ml-1">Live Signal Score:</span>
+                        <span className={`text-[14px] font-mono font-bold px-2 rounded ${botAnalysis.score >= 2 ? 'bg-[#089981]/20 text-[#089981]' : botAnalysis.score <= -2 ? 'bg-[#F23645]/20 text-[#F23645]' : 'bg-[#2A2E39] text-[#D1D4DC]'}`}>
+                          {botAnalysis.score > 0 ? '+' : ''}{botAnalysis.score}
+                        </span>
+                      </div>
+                      {botAnalysis.signals.length > 0 && (
+                        <div className="mt-1.5 text-[10px] text-[#787B86] leading-tight truncate">
+                          Factors: {botAnalysis.signals.join(', ')}
+                        </div>
+                      )}
+                    </div>
+                    
+                    <div className="flex gap-3 mt-auto">
+                       <button onClick={() => executeTrade('BUY')} className="flex-1 py-2 bg-[#089981]/20 hover:bg-[#089981]/40 text-[#089981] font-bold rounded text-[12px] transition-colors shadow-sm">BUY $1000</button>
+                       <button onClick={() => executeTrade('SELL')} className="flex-1 py-2 bg-[#F23645]/20 hover:bg-[#F23645]/40 text-[#F23645] font-bold rounded text-[12px] transition-colors shadow-sm">SELL ALL</button>
+                    </div>
                   </div>
-                </a>
-              )) : (
-                <div className="text-[12px] text-[#787B86] px-1">Waiting for news feed...</div>
+
+                  {/* Right: Transaction History */}
+                  <div className="w-1/3 p-4 flex flex-col">
+                    <div className="text-[11px] font-bold text-[#787B86] uppercase mb-2 flex items-center gap-1.5"><History size={12}/> Transaction Log</div>
+                    <div className="flex-1 overflow-y-auto [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-[#2A2E39] pr-2 space-y-1">
+                      {tradeHistory.length === 0 ? <div className="text-[11px] text-[#787B86]">No trades executed yet.</div> : 
+                        tradeHistory.map(trade => (
+                          <div key={trade.id} className="text-[11px] flex justify-between items-center py-1 border-b border-[#2A2E39]/50">
+                            <span className="text-[#787B86] font-mono">{new Date(trade.time).toLocaleTimeString()} {trade.bot && '🤖'}</span>
+                            <span className={`font-bold ${trade.type === 'BUY' ? 'text-[#089981]' : 'text-[#F23645]'}`}>{trade.type}</span>
+                            <span className="text-white">{trade.pair.replace('USDT','')}</span>
+                            <span className="text-[#787B86] font-mono">${formatNumber(trade.price)}</span>
+                          </div>
+                        ))
+                      }
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex-1 flex gap-4 p-3 overflow-x-auto [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-thumb]:bg-[#2A2E39] [&::-webkit-scrollbar-track]:bg-transparent">
+                  {newsData.length > 0 ? newsData.map(article => (
+                    <a key={article.id} href={article.url} target="_blank" rel="noopener noreferrer" className="w-72 shrink-0 bg-[#131722] border border-[#2A2E39] rounded p-3 hover:border-[#787B86] transition-colors flex flex-col justify-between">
+                      <div>
+                        <div className="text-[10px] text-[#2962FF] font-bold uppercase tracking-wider mb-1.5">{article.source}</div>
+                        <h4 className="text-[13px] text-[#D1D4DC] leading-snug line-clamp-2 hover:text-white transition-colors">{article.title}</h4>
+                      </div>
+                      <div className="text-[11px] text-[#787B86] flex items-center gap-1.5 mt-2">
+                        <Clock size={12} /> {new Date(article.time * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
+                      </div>
+                    </a>
+                  )) : (
+                    <div className="text-[12px] text-[#787B86] px-1">Waiting for news feed...</div>
+                  )}
+                </div>
               )}
             </div>
           </div>
@@ -760,18 +964,6 @@ function LiveCryptoDashboard() {
                  </div>
               </div>
             </div>
-            
-            {fngData && (
-              <div className="mt-3 bg-[#131722] rounded p-2 flex items-center justify-between border border-[#2A2E39]">
-                <span className="text-[11px] font-bold text-[#787B86] uppercase">Sentiment</span>
-                <div className="flex items-center gap-2">
-                  <div className="text-[11px] font-bold" style={{color: fngData.value > 50 ? TV_COLORS.green : TV_COLORS.red}}>{fngData.classification} ({fngData.value})</div>
-                  <div className="w-16 h-1.5 bg-[#2A2E39] rounded-full overflow-hidden">
-                    <div className="h-full" style={{width: `${fngData.value}%`, backgroundColor: fngData.value > 50 ? TV_COLORS.green : TV_COLORS.red}}></div>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
 
           <div className="p-4 border-b border-[#2A2E39] flex flex-col h-72">
@@ -837,7 +1029,7 @@ function LiveCryptoDashboard() {
              <h3 className="text-[13px] font-bold text-[#D1D4DC] flex items-center gap-2 mb-3">
               <Settings size={14} className="text-[#787B86]" /> Chart Studies
              </h3>
-             <div className="space-y-0.5">
+             <div className="space-y-0.5 mb-4">
                 <IndicatorRow label="VPVR" isPro checked={showVPVR} onChange={(e) => setShowVPVR(e.target.checked)} colorClass="bg-[#2962FF]" />
                 <IndicatorRow label="VWAP" isPro checked={showVWAP} onChange={(e) => setShowVWAP(e.target.checked)} colorClass="bg-[#F23645]" />
                 <IndicatorRow label="Auto S/R" isPro checked={showAutoSR} onChange={(e) => setShowAutoSR(e.target.checked)} colorClass="bg-[#089981]" />
@@ -850,11 +1042,22 @@ function LiveCryptoDashboard() {
                 <IndicatorRow label="MACD (12,26,9) pane" checked={showMACD} onChange={(e) => setShowMACD(e.target.checked)} colorClass="bg-[#FF9800]" />
                 <IndicatorRow label="RSI (14) pane" checked={showRSI} onChange={(e) => setShowRSI(e.target.checked)} colorClass="bg-[#9C27B0]" />
              </div>
+             
+             {fngData && (
+              <div className="mt-3 bg-[#131722] rounded p-2 flex items-center justify-between border border-[#2A2E39]">
+                <span className="text-[11px] font-bold text-[#787B86] uppercase">Sentiment</span>
+                <div className="flex items-center gap-2">
+                  <div className="text-[11px] font-bold" style={{color: fngData.value > 50 ? TV_COLORS.green : TV_COLORS.red}}>{fngData.classification} ({fngData.value})</div>
+                  <div className="w-16 h-1.5 bg-[#2A2E39] rounded-full overflow-hidden">
+                    <div className="h-full" style={{width: `${fngData.value}%`, backgroundColor: fngData.value > 50 ? TV_COLORS.green : TV_COLORS.red}}></div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
         </aside>
       </div>
-
     </div>
   );
 }

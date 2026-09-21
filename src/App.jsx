@@ -304,33 +304,49 @@ const IndicatorRow = ({ label, checked, onChange, colorClass, isPro }) => (
 // We extract VPVR into a standalone component outside the main function so Vercel's minifier cannot break it
 const VpvrOverlay = (props) => {
   const { showVPVR, chartData, yAxisMap, offset } = props;
+  
   if (!showVPVR || !chartData || chartData.length === 0) return null;
-  const yAxis = yAxisMap?.price || yAxisMap?.[0] || Object.values(yAxisMap || {})[0];
+  
+  // Safely extract the yAxis scale generated internally by Recharts
+  const yAxis = yAxisMap?.price || yAxisMap?.[Object.keys(yAxisMap || {})[0]];
   if (!yAxis || !yAxis.scale || !offset) return null;
+  
   const yScale = yAxis.scale;
   const binsCount = 50;
+  
+  // Find min and max visible prices to create Volume Bins
   let minPrice = Math.min(...chartData.map(d => d.low !== undefined ? d.low : d.price));
   let maxPrice = Math.max(...chartData.map(d => d.high !== undefined ? d.high : d.price));
+  
   if (minPrice === maxPrice || !isFinite(minPrice) || !isFinite(maxPrice)) return null;
+  
   const binSize = (maxPrice - minPrice) / binsCount;
   const bins = Array.from({ length: binsCount }, (_, i) => ({
     top: minPrice + ((i + 1) * binSize), bottom: minPrice + (i * binSize), volume: 0, upVolume: 0, downVolume: 0
   }));
+  
+  // Distribute volume into bins based on typical price
   chartData.forEach(d => {
     const typPrice = d.candleRange ? (d.candleRange[0] + d.candleRange[1] + (d.close || d.price)) / 3 : d.price;
     const vol = d.volume || 0;
+    
     let idx = Math.floor((typPrice - minPrice) / binSize);
     if (idx >= binsCount) idx = binsCount - 1;
     if (idx < 0) idx = 0;
+    
     bins[idx].volume += vol;
+    
     const isUp = (d.close || d.price) >= (d.open || d.price);
     if (isUp) bins[idx].upVolume += vol;
     else bins[idx].downVolume += vol;
   });
+  
   const maxVol = Math.max(...bins.map(b => b.volume));
   if (maxVol <= 0 || !isFinite(maxVol)) return null;
+  
+  // Define maximum width of the VPVR overlay (25% of the chart width)
   const maxBarWidth = offset.width * 0.25; 
-  const startX = offset.left + offset.width;
+  const startX = offset.left + offset.width; // Anchor to the right side of the chart area
 
   return (
     <g className="vpvr-layer">
@@ -339,10 +355,13 @@ const VpvrOverlay = (props) => {
         const y2 = yScale(bin.bottom);
         const topY = Math.min(y1, y2);
         const rectHeight = Math.max(Math.abs(y1 - y2) - 1, 1); 
+        
         const totalWidth = (bin.volume / maxVol) * maxBarWidth;
         if (totalWidth <= 0 || !isFinite(totalWidth)) return null;
+        
         const upWidth = bin.volume > 0 ? (bin.upVolume / bin.volume) * totalWidth : 0;
         const downWidth = bin.volume > 0 ? (bin.downVolume / bin.volume) * totalWidth : 0;
+        
         return (
           <g key={`vpvr-${i}`}>
             <rect x={startX - totalWidth} y={topY} width={downWidth} height={rectHeight} fill={TV_COLORS.red} fillOpacity={0.4} />
@@ -660,8 +679,9 @@ function LiveCryptoDashboard() {
                         <ReferenceLine key={`sr-${idx}`} yAxisId="price" y={lvl.price} stroke={lvl.type === 'support' ? TV_COLORS.green : TV_COLORS.red} strokeDasharray="3 3" strokeOpacity={0.6} label={{ position: lvl.type === 'support' ? 'insideBottomLeft' : 'insideTopLeft', value: `${lvl.type === 'support' ? 'Support' : 'Resistance'}`, fill: lvl.type === 'support' ? TV_COLORS.green : TV_COLORS.red, fontSize: 10 }} />
                       ))}
 
-                      {/* We now pass the standalone component as a React Element */}
-                      <Customized component={<VpvrOverlay showVPVR={showVPVR} chartData={chartData} />} />
+                      {/* Explicitly pass coordinates to VPVR via Render Prop Function for Vercel production safety */}
+                      <Customized component={(rechartsProps) => <VpvrOverlay {...rechartsProps} showVPVR={showVPVR} chartData={chartData} />} />
+                      
                       {showVolume && <Bar yAxisId="volume" dataKey="volume" fill={TV_COLORS.blue} opacity={0.3} name="Volume" isAnimationActive={false} />}
                       
                       {showBollinger && (

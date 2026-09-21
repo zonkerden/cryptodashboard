@@ -30,6 +30,27 @@ import {
   TrendingDown
 } from 'lucide-react';
 
+// --- Universal API Router (Bypasses Regional/ISP Blocks) ---
+const fetchBinance = async (endpoint) => {
+  const endpoints = [
+    'https://data-api.binance.vision', // Usually unblocked globally
+    'https://api1.binance.com',
+    'https://api2.binance.com',
+    'https://api3.binance.com',
+    'https://api.binance.com'
+  ];
+  
+  for (let base of endpoints) {
+    try {
+      const res = await fetch(`${base}${endpoint}`);
+      if (res.ok) return res;
+    } catch (err) {
+      // Silently fail and try the next backup server
+    }
+  }
+  throw new Error('All Binance APIs failed or are blocked.');
+};
+
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -332,13 +353,13 @@ function LiveCryptoDashboard() {
     return () => { isMounted = false; };
   }, []);
 
-  // Tickers Fetch
+  // Tickers Fetch (Using unblocked fetchBinance)
   useEffect(() => {
     let isMounted = true;
     const fetchTickers = async () => {
       try {
-        const res = await fetch('https://api.binance.com/api/v3/ticker/24hr?symbols=["BTCUSDT","ETHUSDT","SOLUSDT"]');
-        if (!res.ok) return;
+        const symbols = encodeURIComponent('["BTCUSDT","ETHUSDT","SOLUSDT"]');
+        const res = await fetchBinance(`/api/v3/ticker/24hr?symbols=${symbols}`);
         const data = await res.json();
         if (isMounted && Array.isArray(data)) {
           const formatted = data.reduce((acc, curr) => {
@@ -354,26 +375,27 @@ function LiveCryptoDashboard() {
     return () => { isMounted = false; clearInterval(interval); };
   }, []);
 
-  // Order Book & Trades Polling Fallback
+  // Order Book & Trades Polling (Using unblocked fetchBinance)
   useEffect(() => {
     let isMounted = true;
     let fallbackInterval = setInterval(async () => {
       if (!isMounted) return;
       try {
-        const depthRes = await fetch(`https://api.binance.com/api/v3/depth?symbol=${selectedPair}&limit=15`);
-        if (depthRes.ok) {
-          const depthData = await depthRes.json();
+        const depthRes = await fetchBinance(`/api/v3/depth?symbol=${selectedPair}&limit=15`);
+        const depthData = await depthRes.json();
+        if (depthData.bids && depthData.asks) {
           const formatDepth = (arr) => arr.map(item => ({ price: parseFloat(item[0]), qty: parseFloat(item[1]) }));
           const bids = formatDepth(depthData.bids);
-          const asks = formatDepth(depthData.asks).reverse(); // Reverse so highest ask is at top
+          const asks = formatDepth(depthData.asks).reverse();
           let bidsTotal = 0; let asksTotal = 0;
           const mappedBids = bids.map(b => { bidsTotal += b.qty; return { ...b, total: bidsTotal }; });
           const mappedAsks = asks.map(a => { asksTotal += a.qty; return { ...a, total: asksTotal }; });
           setOrderBook({ bids: mappedBids, asks: mappedAsks, maxVol: Math.max(bidsTotal, asksTotal) });
         }
-        const tradeRes = await fetch(`https://api.binance.com/api/v3/trades?symbol=${selectedPair}&limit=20`);
-        if (tradeRes.ok) {
-          const tradeData = await tradeRes.json();
+        
+        const tradeRes = await fetchBinance(`/api/v3/trades?symbol=${selectedPair}&limit=20`);
+        const tradeData = await tradeRes.json();
+        if (Array.isArray(tradeData)) {
           const formattedTrades = tradeData.reverse().map(t => ({
             id: t.id, price: parseFloat(t.price), qty: parseFloat(t.qty), time: t.time, isSell: t.isBuyerMaker
           }));
@@ -384,23 +406,20 @@ function LiveCryptoDashboard() {
     return () => { isMounted = false; clearInterval(fallbackInterval); };
   }, [selectedPair]);
 
-  // Main Chart Data Polling
+  // Main Chart Data Polling (Using unblocked fetchBinance)
   useEffect(() => {
     let pollInterval = null;
     let isMounted = true;
     const tfConfig = TIMEFRAMES[selectedTimeframe];
-    const fetchWithFallback = async (endpoint) => {
-      const endpoints = ['https://api.binance.com', 'https://data-api.binance.vision'];
-      for (let base of endpoints) { try { const res = await fetch(`${base}${endpoint}`); if (res.ok) return res; } catch (err) { } }
-      throw new Error('API failed');
-    };
 
     const fetchHistoricalAndStartPolling = async () => {
       try {
         setLoading(true);
-        const res = await fetchWithFallback(`/api/v3/klines?symbol=${selectedPair}&interval=${tfConfig.interval}&limit=${tfConfig.limit}`);
+        const res = await fetchBinance(`/api/v3/klines?symbol=${selectedPair}&interval=${tfConfig.interval}&limit=${tfConfig.limit}`);
         const json = await res.json();
+        
         if (!isMounted) return;
+        
         if (Array.isArray(json) && json.length > 0) {
           const historicalData = json.map(d => ({
             timestamp: d[0], time: formatTime(d[0], selectedTimeframe), open: parseFloat(d[1]) || 0, high: parseFloat(d[2]) || 0, low: parseFloat(d[3]) || 0, close: parseFloat(d[4]) || 0, price: parseFloat(d[4]) || 0, volume: parseFloat(d[5]) || 0, candleRange: [parseFloat(d[3]) || 0, parseFloat(d[2]) || 0]
@@ -408,15 +427,19 @@ function LiveCryptoDashboard() {
           setData(historicalData);
           setWsStatus('connected');
         } else setData([]);
+        
         setLoading(false);
 
         pollInterval = setInterval(async () => {
           try {
-            const priceRes = await fetchWithFallback(`/api/v3/klines?symbol=${selectedPair}&interval=${tfConfig.interval}&limit=1`);
+            const priceRes = await fetchBinance(`/api/v3/klines?symbol=${selectedPair}&interval=${tfConfig.interval}&limit=1`);
             const priceData = await priceRes.json();
+            
             if (!isMounted || !Array.isArray(priceData) || priceData.length === 0) return;
+            
             const latestKline = priceData[0];
             const klineStartTime = latestKline[0];
+            
             setData(prevData => {
               if (!prevData || prevData.length === 0) return prevData;
               const lastPoint = prevData[prevData.length - 1];
@@ -425,10 +448,16 @@ function LiveCryptoDashboard() {
               else return [...prevData.slice(0, prevData.length - 1), newDataPoint];
             });
             setWsStatus('connected');
-          } catch (pollError) { if (isMounted) setWsStatus('error'); }
+          } catch (pollError) { 
+            if (isMounted) setWsStatus('error'); 
+          }
         }, 3000); 
-      } catch (error) { if (isMounted) { setLoading(false); setData([]); setWsStatus('error'); } }
+        
+      } catch (error) { 
+        if (isMounted) { setLoading(false); setData([]); setWsStatus('error'); } 
+      }
     };
+    
     fetchHistoricalAndStartPolling();
     return () => { isMounted = false; if (pollInterval) clearInterval(pollInterval); };
   }, [selectedPair, selectedTimeframe]);
@@ -548,9 +577,13 @@ function LiveCryptoDashboard() {
              <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-[#089981]/10 text-[#089981] text-[11px] font-bold tracking-wide">
                <div className="w-1.5 h-1.5 rounded-full bg-[#089981] animate-pulse"></div> LIVE
              </span>
-          ) : (
+          ) : wsStatus === 'connecting' ? (
              <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-[#F7931A]/10 text-[#F7931A] text-[11px] font-bold tracking-wide">
-               <Loader2 size={12} className="animate-spin" /> CONNECTING
+               <Loader2 size={12} className="animate-spin" /> BYPASSING ISP...
+             </span>
+          ) : (
+             <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-[#F23645]/10 text-[#F23645] text-[11px] font-bold tracking-wide">
+               ERROR
              </span>
           )}
         </div>
@@ -592,7 +625,7 @@ function LiveCryptoDashboard() {
             {loading ? (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-[#787B86] z-20">
                 <Loader2 className="w-10 h-10 animate-spin mb-4 text-[#2962FF]" />
-                <p>Loading Chart Data...</p>
+                <p>Establishing secure API connection...</p>
               </div>
             ) : (
               <>

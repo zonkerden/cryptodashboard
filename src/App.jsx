@@ -10,7 +10,8 @@ import {
   Tooltip, 
   Legend,
   ReferenceLine,
-  BarChart
+  BarChart,
+  Customized
 } from 'recharts';
 import { 
   Activity, 
@@ -462,9 +463,9 @@ export default function OrderFlowDashboard() {
     };
   }, [selectedPair, selectedTimeframe]);
 
-  const { chartData, autoSR, yDomain, volDomain, vpvrData } = useMemo(() => {
+  const { chartData, autoSR, yDomain, volDomain, clampedMaxPain } = useMemo(() => {
     if (data.length === 0) {
-      return { chartData: [], autoSR: {support: null, resistance: null}, yDomain: [0, 100], volDomain: [0, 100], vpvrData: [] };
+      return { chartData: [], autoSR: {support: null, resistance: null}, yDomain: [0, 100], volDomain: [0, 100], clampedMaxPain: null };
     }
     
     let processed = calculateSMA(data, 14);
@@ -477,18 +478,22 @@ export default function OrderFlowDashboard() {
     let min = prices.length > 0 ? Math.min(...prices) : 0;
     let max = prices.length > 0 ? Math.max(...prices) : 100;
     
-    // NEW: Expand the chart domain to include the Max Pain and S/R lines
+    let displayMaxPain = null;
+
+    // Smart Clamping for Max Pain to prevent 1px squashed candles
     if (showIndicators.maxPain && optionsData.maxPain) {
-      min = Math.min(min, optionsData.maxPain);
-      max = Math.max(max, optionsData.maxPain);
+      const maxDist = currentPrice * 0.05; // Cap zooming at 5% away from current price
+      displayMaxPain = optionsData.maxPain;
+      
+      if (displayMaxPain > currentPrice + maxDist) displayMaxPain = currentPrice + maxDist;
+      if (displayMaxPain < currentPrice - maxDist) displayMaxPain = currentPrice - maxDist;
+      
+      min = Math.min(min, displayMaxPain);
+      max = Math.max(max, displayMaxPain);
     }
+    
     if (showIndicators.sr && sr.support) min = Math.min(min, sr.support);
     if (showIndicators.sr && sr.resistance) max = Math.max(max, sr.resistance);
-
-    // NEW: Prevent extreme zooming that would squash the candles into a flat line
-    const maxZoom = currentPrice * 0.08; // Cap zoom to 8% away from current price
-    min = Math.max(min, currentPrice - maxZoom);
-    max = Math.min(max, currentPrice + maxZoom);
 
     const padding = (max - min) * 0.1;
     const safeDomain = [Math.max(0, min - padding), max + padding];
@@ -497,24 +502,56 @@ export default function OrderFlowDashboard() {
     const maxVol = volumes.length > 0 ? Math.max(...volumes) : 100;
     const safeVolDomain = [0, maxVol * 4]; 
 
-    const binsCount = 40;
-    const binSize = max > min ? (max - min) / binsCount : 1;
+    return { chartData: processed, autoSR: sr, yDomain: safeDomain, volDomain: safeVolDomain, clampedMaxPain: displayMaxPain };
+  }, [data, showIndicators, optionsData.maxPain]);
+
+  const renderVPVR = (props) => {
+    if (!showIndicators.vpvr || chartData.length === 0) return null;
+    const { yAxisMap, offset } = props;
+    if (!yAxisMap || !yAxisMap.price || !offset) return null;
+
+    const yScale = yAxisMap.price.scale;
+    const binsCount = 50;
+    
+    const minPrice = Math.min(...chartData.map(d => d.low));
+    const maxPrice = Math.max(...chartData.map(d => d.high));
+    if (minPrice === maxPrice) return null;
+
+    const binSize = (maxPrice - minPrice) / binsCount;
     const bins = Array.from({ length: binsCount }, (_, i) => ({
-      priceLevel: min + (i * binSize) + (binSize / 2),
+      top: minPrice + ((i + 1) * binSize),
+      bottom: minPrice + (i * binSize),
       vol: 0
     }));
 
-    if (showIndicators.vpvr && max > min) {
-      data.forEach(d => {
-        const typPrice = (d.low + d.high + d.close) / 3;
-        let idx = Math.floor((typPrice - min) / binSize);
-        idx = Math.max(0, Math.min(idx, binsCount - 1));
-        bins[idx].vol += (isFinite(d.volume) ? d.volume : 0);
-      });
-    }
+    chartData.forEach(d => {
+      const typPrice = (d.low + d.high + d.close) / 3;
+      let idx = Math.floor((typPrice - minPrice) / binSize);
+      idx = Math.max(0, Math.min(idx, binsCount - 1));
+      bins[idx].vol += (isFinite(d.volume) ? d.volume : 0);
+    });
 
-    return { chartData: processed, autoSR: sr, yDomain: safeDomain, volDomain: safeVolDomain, vpvrData: bins };
-  }, [data, showIndicators, optionsData.maxPain]);
+    const maxVol = Math.max(...bins.map(b => b.vol));
+    if (maxVol === 0) return null;
+
+    const maxBarWidth = offset.width * 0.25; 
+    const startX = offset.left + offset.width;
+
+    return (
+      <g className="vpvr-layer">
+        {bins.map((bin, i) => {
+          const y1 = yScale(bin.top);
+          const y2 = yScale(bin.bottom);
+          const topY = Math.min(y1, y2);
+          const rectHeight = Math.max(Math.abs(y1 - y2) - 1, 1);
+          const width = (bin.vol / maxVol) * maxBarWidth;
+          
+          if (width === 0) return null;
+          return <rect key={`vpvr-${i}`} x={startX - width} y={topY} width={width} height={rectHeight} fill="#3b82f6" fillOpacity={0.25} />;
+        })}
+      </g>
+    );
+  };
 
   const setupAnalysis = useMemo(() => {
     if (chartData.length < 2) return null;
@@ -649,21 +686,6 @@ export default function OrderFlowDashboard() {
           ) : (
             <div className="flex-1 relative w-full h-full p-2">
               
-              {/* Back Layer: VPVR Overlay */}
-              {showIndicators.vpvr && vpvrData.length > 0 && (
-                <div className="absolute top-[20px] bottom-[25px] right-[70px] left-0 opacity-20 pointer-events-none z-0">
-                   <div className="w-[30%] h-full ml-auto">
-                     <ResponsiveContainer width="100%" height="100%">
-                        <BarChart layout="vertical" data={vpvrData} margin={{top:0, right:0, left:0, bottom:0}}>
-                          <XAxis type="number" hide reversed domain={[0, 'dataMax']} />
-                          <YAxis type="number" dataKey="priceLevel" hide domain={yDomain} />
-                          <Bar dataKey="vol" fill="#3b82f6" isAnimationActive={false} />
-                        </BarChart>
-                     </ResponsiveContainer>
-                   </div>
-                </div>
-              )}
-
               {/* Front Layer: Primary Price Action */}
               <div className="absolute inset-0 z-10 p-2">
                 <ResponsiveContainer width="100%" height="100%">
@@ -672,6 +694,9 @@ export default function OrderFlowDashboard() {
                     <XAxis dataKey="time" stroke="#64748b" tick={{fill:'#94a3b8', fontSize:11}} tickMargin={10} minTickGap={30} axisLine={false} tickLine={false} />
                     <YAxis yAxisId="price" domain={yDomain} stroke="#64748b" tick={{fill:'#94a3b8', fontSize:12, fontFamily:'monospace'}} width={70} orientation="right" axisLine={false} tickLine={false} />
                     <YAxis yAxisId="volume" hide domain={volDomain} />
+                    
+                    {/* Fixed VPVR overlaid flawlessly using custom SVG math */}
+                    <Customized component={renderVPVR} />
 
                     <Tooltip 
                       cursor={{ stroke: '#334155', strokeWidth: 1, strokeDasharray: '4 4' }}
@@ -685,15 +710,22 @@ export default function OrderFlowDashboard() {
                     {showIndicators.sr && autoSR.support && <ReferenceLine yAxisId="price" y={autoSR.support} stroke="#10b981" strokeDasharray="3 3" strokeOpacity={0.7} />}
                     {showIndicators.sr && autoSR.resistance && <ReferenceLine yAxisId="price" y={autoSR.resistance} stroke="#f43f5e" strokeDasharray="3 3" strokeOpacity={0.7} />}
 
-                    {/* NEW: Options Max Pain Line */}
-                    {showIndicators.maxPain && optionsData.maxPain && (
+                    {/* Fixed Options Max Pain Line */}
+                    {showIndicators.maxPain && optionsData.maxPain && clampedMaxPain && (
                       <ReferenceLine 
                         yAxisId="price" 
-                        y={optionsData.maxPain} 
+                        y={clampedMaxPain} 
                         stroke="#eab308" 
                         strokeWidth={2} 
                         strokeOpacity={0.8}
-                        label={{ position: 'insideTopLeft', value: 'GAMMA WALL (MAX PAIN)', fill: '#eab308', fontSize: 10, fontWeight: 'bold' }}
+                        strokeDasharray={clampedMaxPain !== optionsData.maxPain ? "5 5" : ""}
+                        label={{ 
+                          position: 'insideTopLeft', 
+                          value: clampedMaxPain !== optionsData.maxPain 
+                            ? `GAMMA WALL (OFF-SCREEN: $${optionsData.maxPain.toLocaleString()})` 
+                            : 'GAMMA WALL (MAX PAIN)', 
+                          fill: '#eab308', fontSize: 10, fontWeight: 'bold' 
+                        }}
                       />
                     )}
 

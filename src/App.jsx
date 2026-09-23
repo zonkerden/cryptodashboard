@@ -472,8 +472,24 @@ export default function OrderFlowDashboard() {
     const sr = calculateAutoSR(data);
     
     const prices = data.map(d => d.price).filter(isFinite);
-    const min = prices.length > 0 ? Math.min(...prices) : 0;
-    const max = prices.length > 0 ? Math.max(...prices) : 100;
+    const currentPrice = prices.length > 0 ? prices[prices.length - 1] : 0;
+    
+    let min = prices.length > 0 ? Math.min(...prices) : 0;
+    let max = prices.length > 0 ? Math.max(...prices) : 100;
+    
+    // NEW: Expand the chart domain to include the Max Pain and S/R lines
+    if (showIndicators.maxPain && optionsData.maxPain) {
+      min = Math.min(min, optionsData.maxPain);
+      max = Math.max(max, optionsData.maxPain);
+    }
+    if (showIndicators.sr && sr.support) min = Math.min(min, sr.support);
+    if (showIndicators.sr && sr.resistance) max = Math.max(max, sr.resistance);
+
+    // NEW: Prevent extreme zooming that would squash the candles into a flat line
+    const maxZoom = currentPrice * 0.08; // Cap zoom to 8% away from current price
+    min = Math.max(min, currentPrice - maxZoom);
+    max = Math.min(max, currentPrice + maxZoom);
+
     const padding = (max - min) * 0.1;
     const safeDomain = [Math.max(0, min - padding), max + padding];
 
@@ -498,7 +514,7 @@ export default function OrderFlowDashboard() {
     }
 
     return { chartData: processed, autoSR: sr, yDomain: safeDomain, volDomain: safeVolDomain, vpvrData: bins };
-  }, [data, showIndicators.vpvr]);
+  }, [data, showIndicators, optionsData.maxPain]);
 
   const setupAnalysis = useMemo(() => {
     if (chartData.length < 2) return null;

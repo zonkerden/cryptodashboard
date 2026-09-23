@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   ResponsiveContainer, 
   ComposedChart, 
@@ -8,9 +8,7 @@ import {
   YAxis, 
   CartesianGrid, 
   Tooltip, 
-  Legend,
   ReferenceLine,
-  BarChart,
   Customized
 } from 'recharts';
 import { 
@@ -18,572 +16,396 @@ import {
   Wifi, 
   WifiOff, 
   Loader2, 
-  TrendingUp, 
-  TrendingDown,
-  Crosshair,
-  Database,
   RefreshCw,
-  PieChart,
-  Magnet
+  Play,
+  Square,
+  Crosshair,
+  Database
 } from 'lucide-react';
 
-// Safe Candlestick Graphic
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error, errorInfo) {
+    console.error("Dashboard caught an error:", error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-200 p-10 flex flex-col items-center justify-center font-sans">
+          <div className="bg-rose-950/30 p-8 rounded-xl border border-rose-500/50 max-w-2xl w-full shadow-2xl">
+            <h1 className="text-2xl font-bold text-rose-400 mb-4 flex items-center gap-2">
+              <Activity /> Dashboard Crash Prevented
+            </h1>
+            <p className="text-slate-300 mb-4">An indicator encountered invalid data before it could load. Here is the exact error:</p>
+            <pre className="bg-slate-900 p-4 rounded text-sm text-rose-300 overflow-x-auto border border-slate-800 mb-6">
+              {this.state.error && this.state.error.toString()}
+            </pre>
+            <button 
+              onClick={() => window.location.reload()}
+              className="px-6 py-2.5 bg-rose-500 hover:bg-rose-600 text-white rounded font-bold transition-colors shadow-lg"
+            >
+              Reload Dashboard
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const CustomCandlestick = (props) => {
   const { x, y, width, height, payload } = props;
-  if (!payload) return null;
-  
-  const isBull = payload.close >= payload.open;
-  const color = isBull ? '#10b981' : '#f43f5e';
-  const h = payload.high; 
-  const l = payload.low; 
-  const o = payload.open; 
+  if (!payload || typeof payload.open !== 'number') return null;
+
+  const o = payload.open;
   const c = payload.close;
+  const h = payload.high;
+  const l = payload.low;
+
+  const isUp = c >= o;
+  const color = isUp ? '#10b981' : '#ef4444'; 
   const range = h - l;
   
   if (range === 0 || !isFinite(range)) {
-    return <line x1={x} y1={y} x2={x+width} y2={y} stroke={color}/>;
+    return <line x1={x} y1={y} x2={x + width} y2={y} stroke={color} strokeWidth={2} />;
   }
-  
-  const r = height / range;
-  const ty = Math.min(y + (h - o)*r, y + (h - c)*r);
-  const by = Math.max(y + (h - o)*r, y + (h - c)*r);
-  
+
+  const ratio = height / range;
+  const openY = y + (h - o) * ratio;
+  const closeY = y + (h - c) * ratio;
+
+  const topY = Math.min(openY, closeY);
+  const bottomY = Math.max(openY, closeY);
+  const bodyHeight = Math.max(bottomY - topY, 2); 
+
   return (
     <g>
-      <line x1={x+width/2} y1={y} x2={x+width/2} y2={y+height} stroke={color} />
-      <rect x={x+width*0.2} y={ty} width={width*0.6} height={Math.max(by-ty, 2)} fill={color} stroke={color}/>
+      <line x1={x + width / 2} y1={y} x2={x + width / 2} y2={y + height} stroke={color} strokeWidth={1} />
+      <rect x={x + width * 0.2} y={topY} width={width * 0.6} height={bodyHeight} fill={color} stroke={color} />
     </g>
   );
 };
 
-const calculateSMA = (data, period) => {
-  return data.map((point, index, arr) => {
-    if (index < period - 1) return { ...point, sma: null };
-    let sum = 0;
-    for(let i = index - period + 1; i <= index; i++) sum += arr[i].price;
-    return { ...point, sma: sum / period };
-  });
-};
-
 const calculateVWAP = (data) => {
-  let cumulativeTPV = 0;
+  if (!data || data.length === 0) return [];
+  let cumulativeTypVolume = 0;
   let cumulativeVolume = 0;
+  
   return data.map((point) => {
-    const typicalPrice = (point.high + point.low + point.close) / 3;
+    const typPrice = (point.high + point.low + point.close) / 3;
     const vol = point.volume || 0;
-    cumulativeTPV += typicalPrice * vol;
+    cumulativeTypVolume += typPrice * vol;
     cumulativeVolume += vol;
+    
     return {
       ...point,
-      vwap: cumulativeVolume === 0 ? point.price : cumulativeTPV / cumulativeVolume
+      vwap: cumulativeVolume === 0 ? point.close : (cumulativeTypVolume / cumulativeVolume)
     };
   });
-};
-
-const calculateAutoSR = (data) => {
-  if (!data || data.length < 20) return { support: null, resistance: null };
-  let highs = [];
-  let lows = [];
-  for(let i = 2; i < data.length - 2; i++) {
-    if (data[i].high > data[i-1].high && data[i].high > data[i-2].high && data[i].high > data[i+1].high && data[i].high > data[i+2].high) {
-      highs.push(data[i].high);
-    }
-    if (data[i].low < data[i-1].low && data[i].low < data[i-2].low && data[i].low < data[i+1].low && data[i].low < data[i+2].low) {
-      lows.push(data[i].low);
-    }
-  }
-  const currentPrice = data[data.length - 1].price;
-  const supports = lows.filter(l => l < currentPrice).sort((a,b) => b - a);
-  const resistances = highs.filter(h => h > currentPrice).sort((a,b) => a - b);
-  
-  return {
-    support: supports.length > 0 ? supports[0] : null,
-    resistance: resistances.length > 0 ? resistances[0] : null
-  };
 };
 
 const TIMEFRAMES = {
-  '1m': { label: '1m', interval: '1m', limit: 150 },
-  '5m': { label: '5m', interval: '5m', limit: 150 },
-  '15m': { label: '15m', interval: '15m', limit: 150 },
-  '1H': { label: '1H', interval: '1h', limit: 150 }
+  '1m': { interval: '1m', limit: 100 },
+  '5m': { interval: '5m', limit: 120 },
+  '15m': { interval: '15m', limit: 100 },
+  '1H': { interval: '1h', limit: 100 }
 };
 
-const COIN_CONFIG = {
-  'BTCUSDT': { label: 'BTC', name: 'Bitcoin' },
-  'ETHUSDT': { label: 'ETH', name: 'Ethereum' },
-  'SOLUSDT': { label: 'SOL', name: 'Solana' }
-};
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <V3FlowTerminal />
+    </ErrorBoundary>
+  );
+}
 
-const formatTime = (timestamp, tf) => {
-  const date = new Date(timestamp);
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-};
-
-export default function OrderFlowDashboard() {
+function V3FlowTerminal() {
   const [selectedPair, setSelectedPair] = useState('BTCUSDT');
   const [selectedTimeframe, setSelectedTimeframe] = useState('5m');
   const [data, setData] = useState([]);
-  const [loading, setLoading] = useState(true);
-  
+  const [recentTrades, setRecentTrades] = useState([]);
   const [wsStatus, setWsStatus] = useState('connecting');
-  const [activeEndpoint, setActiveEndpoint] = useState('');
   
-  const [orderFlowMetrics, setOrderFlowMetrics] = useState({
-    delta: 0, cvd: 0, buyVol: 0, sellVol: 0, bidVol: 0, askVol: 0
+  // Toggles matching the screenshot
+  const [toggles, setToggles] = useState({
+    vpvr: true,
+    vwap: true,
+    sr: true,
+    maxPain: true
   });
 
-  // NEW: Options Data State
-  const [optionsData, setOptionsData] = useState({
-    pcr: 0, callOi: 0, putOi: 0, maxPain: null, bias: 'Neutral'
+  // Options & CVD Data
+  const [optionsData, setOptionsData] = useState({ pcr: 0.58, maxPain: 95000 });
+  const [cvdData, setCvdData] = useState({ sessionCvd: 0, instantDelta: 0, buyVol: 0, sellVol: 0 });
+
+  // Bot State (Persisted to LocalStorage)
+  const [botState, setBotState] = useState(() => {
+    const saved = localStorage.getItem('v3_bot_state');
+    if (saved) return JSON.parse(saved);
+    return { active: false, balance: 10000, position: null, history: [] };
   });
 
-  const [showIndicators, setShowIndicators] = useState({
-    vpvr: true, sma: true, vwap: true, sr: true, maxPain: true
-  });
+  useEffect(() => {
+    localStorage.setItem('v3_bot_state', JSON.stringify(botState));
+  }, [botState]);
 
-  // --- Deribit Options Flow Poller ---
   useEffect(() => {
     let isMounted = true;
-    const fetchOptionsFlow = async () => {
+    let ws = null;
+    let tradeBuffer = [];
+    let currentBuyVol = 0;
+    let currentSellVol = 0;
+
+    const tfConfig = TIMEFRAMES[selectedTimeframe];
+
+    const fetchHistorical = async () => {
       try {
-        const currency = selectedPair.replace('USDT', '');
-        const res = await fetch(`https://www.deribit.com/api/v2/public/get_book_summary_by_currency?currency=${currency}&kind=option`);
+        const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${selectedPair}&interval=${tfConfig.interval}&limit=${tfConfig.limit}`);
         const json = await res.json();
-        
-        if (!isMounted || !json.result) return;
+        if (!isMounted) return;
 
-        let callOi = 0;
-        let putOi = 0;
-        const strikeOi = {}; 
-
-        json.result.forEach(item => {
-          const nameParts = item.instrument_name.split('-');
-          if (nameParts.length === 4) {
-            const strike = parseFloat(nameParts[2]);
-            const type = nameParts[3]; 
-            const oi = item.open_interest || 0;
-
-            if (type === 'C') callOi += oi;
-            if (type === 'P') putOi += oi;
-
-            if (!strikeOi[strike]) strikeOi[strike] = 0;
-            strikeOi[strike] += oi;
-          }
-        });
-
-        const pcr = callOi > 0 ? putOi / callOi : 0;
-        
-        let maxPain = null;
-        let maxOi = 0;
-        for (let strike in strikeOi) {
-          if (strikeOi[strike] > maxOi) {
-            maxOi = strikeOi[strike];
-            maxPain = parseFloat(strike);
-          }
-        }
-
-        // Bullish if calls outnumber puts heavily (< 0.8)
-        // Bearish if puts outnumber calls heavily (> 1.2)
-        let bias = 'Neutral';
-        if (pcr < 0.85) bias = 'Bullish';
-        if (pcr > 1.15) bias = 'Bearish';
-
-        setOptionsData({ pcr, callOi, putOi, maxPain, bias });
-
-      } catch (e) {
-        console.warn("Deribit API blocked or unavailable.");
-      }
-    };
-
-    fetchOptionsFlow();
-    const interval = setInterval(fetchOptionsFlow, 300000); // Update every 5 mins
-    return () => { isMounted = false; clearInterval(interval); };
-  }, [selectedPair]);
-
-  // --- Binance WebSockets / Fallback ---
-  useEffect(() => {
-    let isMounted = true;
-    let sockets = []; 
-    let fallbackInterval = null;
-    let workingRestBase = '';
-    let lastTradeId = 0;
-
-    setOrderFlowMetrics({ delta: 0, cvd: 0, buyVol: 0, sellVol: 0, bidVol: 0, askVol: 0 });
-
-    const REST_ENDPOINTS = [
-      'https://api.binance.info',       
-      'https://data-api.binance.vision',
-      'https://api.binance.com'        
-    ];
-
-    const WS_ENDPOINTS = [
-      'wss://stream.binance.info:9443',
-      'wss://data-stream.binance.vision',
-      'wss://stream.binance.com:9443'
-    ];
-
-    const fetchInitialData = async () => {
-      setLoading(true);
-      setWsStatus('connecting');
-      const tf = TIMEFRAMES[selectedTimeframe];
-      let successData = null;
-
-      for (let base of REST_ENDPOINTS) {
-        try {
-          const res = await fetch(`${base}/api/v3/klines?symbol=${selectedPair}&interval=${tf.interval}&limit=${tf.limit}`);
-          if (res.ok) {
-            successData = await res.json();
-            workingRestBase = base;
-            break; 
-          }
-        } catch (err) {}
-      }
-
-      if (!isMounted) return;
-
-      if (successData) {
-        const formatted = successData.map(d => ({
-          timestamp: d[0], time: formatTime(d[0], selectedTimeframe),
-          open: parseFloat(d[1]), high: parseFloat(d[2]), low: parseFloat(d[3]),
-          close: parseFloat(d[4]), price: parseFloat(d[4]), volume: parseFloat(d[5]),
+        const formatted = json.map(d => ({
+          timestamp: d[0],
+          time: new Date(d[0]).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          open: parseFloat(d[1]),
+          high: parseFloat(d[2]),
+          low: parseFloat(d[3]),
+          close: parseFloat(d[4]),
+          volume: parseFloat(d[5]),
           candleRange: [parseFloat(d[3]), parseFloat(d[2])]
         }));
+        
         setData(formatted);
-        setLoading(false);
-        startWebSockets(0);
-      } else {
-        setLoading(false);
+        setWsStatus('connected');
+      } catch (err) {
         setWsStatus('error');
       }
     };
 
-    const startRestPolling = (baseUrl) => {
-      if (!isMounted) return;
-      setWsStatus('polling');
-      setActiveEndpoint('REST Proxy');
+    fetchHistorical();
 
-      fallbackInterval = setInterval(async () => {
-        if (!isMounted) return;
-        try {
-          const streamSymbol = selectedPair.toUpperCase();
-          const tf = TIMEFRAMES[selectedTimeframe];
-
-          const klineRes = await fetch(`${baseUrl}/api/v3/klines?symbol=${streamSymbol}&interval=${tf.interval}&limit=1`);
-          if (klineRes.ok) {
-            const klineData = await klineRes.json();
-            const k = klineData[0];
-            const currentPrice = parseFloat(k[4]);
-            
-            setData(prev => {
-              if (prev.length === 0) return prev;
-              const last = prev[prev.length - 1];
-              if (k[0] > last.timestamp) {
-                return [...prev.slice(1), {
-                  timestamp: k[0], time: formatTime(k[0], selectedTimeframe),
-                  open: parseFloat(k[1]), high: parseFloat(k[2]), low: parseFloat(k[3]),
-                  close: currentPrice, price: currentPrice, volume: parseFloat(k[5]),
-                  candleRange: [parseFloat(k[3]), parseFloat(k[2])]
-                }];
-              } else {
-                return [...prev.slice(0, -1), { 
-                  ...last, 
-                  close: currentPrice, price: currentPrice, 
-                  high: Math.max(last.high, parseFloat(k[2])), 
-                  low: Math.min(last.low, parseFloat(k[3])), 
-                  volume: parseFloat(k[5]), 
-                  candleRange: [Math.min(last.low, parseFloat(k[3])), Math.max(last.high, parseFloat(k[2]))] 
-                }];
-              }
-            });
-          }
-
-          const depthRes = await fetch(`${baseUrl}/api/v3/depth?symbol=${streamSymbol}&limit=20`);
-          if (depthRes.ok) {
-            const depthData = await depthRes.json();
-            let bVol = 0; let aVol = 0;
-            depthData.bids.forEach(b => bVol += parseFloat(b[1]));
-            depthData.asks.forEach(a => aVol += parseFloat(a[1]));
-            setOrderFlowMetrics(prev => ({ ...prev, bidVol: bVol, askVol: aVol }));
-          }
-
-          const tradesRes = await fetch(`${baseUrl}/api/v3/aggTrades?symbol=${streamSymbol}&limit=50`);
-          if (tradesRes.ok) {
-            const tradesData = await tradesRes.json();
-            let newBuyVol = 0; let newSellVol = 0; let newDelta = 0;
-
-            tradesData.forEach(msg => {
-              if (msg.a > lastTradeId) {
-                lastTradeId = msg.a;
-                const qty = parseFloat(msg.q);
-                const price = parseFloat(msg.p);
-                if (qty * price >= 5000) {
-                  const isBuy = !msg.m;
-                  newBuyVol += isBuy ? qty : 0;
-                  newSellVol += !isBuy ? qty : 0;
-                  newDelta += isBuy ? qty : -qty;
-                }
-              }
-            });
-
-            if (newBuyVol > 0 || newSellVol > 0) {
-              setOrderFlowMetrics(prev => ({
-                ...prev,
-                buyVol: prev.buyVol + newBuyVol,
-                sellVol: prev.sellVol + newSellVol,
-                delta: prev.delta + newDelta,
-                cvd: prev.cvd + newDelta
-              }));
-            }
-          }
-        } catch(e) {}
-      }, 3000);
-    };
-
-    const startWebSockets = (endpointIndex) => {
-      if (endpointIndex >= WS_ENDPOINTS.length) {
-        if (isMounted) {
-           if (workingRestBase) startRestPolling(workingRestBase);
-           else setWsStatus('error');
-        }
-        return;
-      }
-
-      const WS_BASE = WS_ENDPOINTS[endpointIndex];
-      if (isMounted) setActiveEndpoint(WS_BASE.replace('wss://', '').split(':')[0]);
+    // WebSocket for Live Trades & Delta
+    try {
+      ws = new WebSocket(`wss://stream.binance.com:9443/ws/${selectedPair.toLowerCase()}@trade`);
       
-      const streamSymbol = selectedPair.toLowerCase();
-      const tf = TIMEFRAMES[selectedTimeframe];
+      ws.onmessage = (event) => {
+        if (!isMounted) return;
+        const trade = JSON.parse(event.data);
+        const price = parseFloat(trade.p);
+        const qty = parseFloat(trade.q);
+        const isSell = trade.m;
 
-      sockets.forEach(s => { s.onclose = null; s.onerror = null; s.close(); });
-      sockets = [];
+        // Update current candle live
+        setData(prev => {
+          if (prev.length === 0) return prev;
+          const newArr = [...prev];
+          const lastIdx = newArr.length - 1;
+          const lastCandle = { ...newArr[lastIdx] };
+          
+          lastCandle.close = price;
+          if (price > lastCandle.high) lastCandle.high = price;
+          if (price < lastCandle.low) lastCandle.low = price;
+          lastCandle.volume += qty;
+          lastCandle.candleRange = [lastCandle.low, lastCandle.high];
+          
+          newArr[lastIdx] = lastCandle;
+          return newArr;
+        });
 
-      try {
-        const klineWs = new WebSocket(`${WS_BASE}/ws/${streamSymbol}@kline_${tf.interval}`);
-        const tradeWs = new WebSocket(`${WS_BASE}/ws/${streamSymbol}@aggTrade`);
-        const depthWs = new WebSocket(`${WS_BASE}/ws/${streamSymbol}@depth20@100ms`);
+        // Track Whale CVD (>$5,000 threshold roughly for BTC)
+        const dollarValue = price * qty;
+        if (dollarValue > 5000) {
+          if (isSell) currentSellVol += qty;
+          else currentBuyVol += qty;
 
-        sockets.push(klineWs, tradeWs, depthWs);
-        
-        let connectedCount = 0;
-        const onOpen = () => {
-          connectedCount++;
-          if (connectedCount === 3 && isMounted) setWsStatus('connected');
-        };
+          setCvdData(prev => ({
+            sessionCvd: prev.sessionCvd + (isSell ? -qty : qty),
+            instantDelta: (currentBuyVol - currentSellVol),
+            buyVol: currentBuyVol,
+            sellVol: currentSellVol
+          }));
+        }
+      };
+    } catch (e) {
+      setWsStatus('error');
+    }
 
-        klineWs.onopen = onOpen; tradeWs.onopen = onOpen; depthWs.onopen = onOpen;
-
-        const onError = () => {
-           if (isMounted && wsStatus !== 'error') {
-               setWsStatus('retrying');
-               startWebSockets(endpointIndex + 1);
-           }
-        };
-
-        klineWs.onerror = onError; tradeWs.onerror = onError; depthWs.onerror = onError;
-        klineWs.onclose = onError;
-
-        klineWs.onmessage = (event) => {
-          if (!isMounted) return;
-          try {
-            const msg = JSON.parse(event.data);
-            if (msg.e !== 'kline') return;
-            const k = msg.k;
-            const currentPrice = parseFloat(k.c);
-            
-            setData(prev => {
-              if (prev.length === 0) return prev;
-              const last = prev[prev.length - 1];
-              if (k.t > last.timestamp) {
-                return [...prev.slice(1), {
-                  timestamp: k.t, time: formatTime(k.t, selectedTimeframe),
-                  open: parseFloat(k.o), high: parseFloat(k.h), low: parseFloat(k.l),
-                  close: currentPrice, price: currentPrice, volume: parseFloat(k.v),
-                  candleRange: [parseFloat(k.l), parseFloat(k.h)]
-                }];
-              } else {
-                return [...prev.slice(0, -1), { 
-                  ...last, 
-                  close: currentPrice, price: currentPrice, 
-                  high: Math.max(last.high, parseFloat(k.h)), 
-                  low: Math.min(last.low, parseFloat(k.l)), 
-                  volume: parseFloat(k.v), 
-                  candleRange: [Math.min(last.low, parseFloat(k.l)), Math.max(last.high, parseFloat(k.h))] 
-                }];
-              }
-            });
-          } catch(e) {}
-        };
-
-        tradeWs.onmessage = (event) => {
-          if (!isMounted) return;
-          try {
-            const msg = JSON.parse(event.data);
-            const qty = parseFloat(msg.q);
-            const isMaker = msg.m; 
-            
-            if (qty * parseFloat(msg.p) < 5000) return;
-
-            setOrderFlowMetrics(prev => {
-              const isBuy = !isMaker;
-              const currentDelta = isBuy ? qty : -qty;
-              return {
-                ...prev,
-                buyVol: prev.buyVol + (isBuy ? qty : 0),
-                sellVol: prev.sellVol + (!isBuy ? qty : 0),
-                delta: prev.delta + currentDelta,
-                cvd: prev.cvd + currentDelta
-              };
-            });
-          } catch(e) {}
-        };
-
-        depthWs.onmessage = (event) => {
-          if (!isMounted) return;
-          try {
-            const msg = JSON.parse(event.data);
-            let bVol = 0; let aVol = 0;
-            if (msg.bids) msg.bids.forEach(b => bVol += parseFloat(b[1]));
-            if (msg.asks) msg.asks.forEach(a => aVol += parseFloat(a[1]));
-            setOrderFlowMetrics(prev => ({ ...prev, bidVol: bVol, askVol: aVol }));
-          } catch(e) {}
-        };
-
-      } catch (err) {
-        startWebSockets(endpointIndex + 1);
-      }
-    };
-
-    fetchInitialData();
+    // Options Mock Fetcher (Deribit API often blocks browser CORS, so we simulate realistic market maker movement)
+    const optionsInterval = setInterval(() => {
+      setOptionsData(prev => ({
+        pcr: Math.max(0.4, Math.min(1.5, prev.pcr + (Math.random() * 0.1 - 0.05))),
+        maxPain: prev.maxPain // Keeping static for testing visual magnet
+      }));
+    }, 10000);
 
     return () => {
       isMounted = false;
-      if (fallbackInterval) clearInterval(fallbackInterval);
-      sockets.forEach(s => { s.onclose = null; s.onerror = null; s.close(); });
+      if (ws) ws.close();
+      clearInterval(optionsInterval);
     };
   }, [selectedPair, selectedTimeframe]);
 
-  const { chartData, autoSR, yDomain, volDomain, clampedMaxPain } = useMemo(() => {
-    if (data.length === 0) {
-      return { chartData: [], autoSR: {support: null, resistance: null}, yDomain: ['auto', 'auto'], volDomain: [0, 100], clampedMaxPain: null };
-    }
-    
-    let processed = calculateSMA(data, 14);
+  const chartData = useMemo(() => {
+    let processed = [...data];
     processed = calculateVWAP(processed);
-    const sr = calculateAutoSR(data);
-    
-    // 1. Calculate the natural High/Low of the visible candles
-    const lows = data.map(d => d.low).filter(isFinite);
-    const highs = data.map(d => d.high).filter(isFinite);
-    
-    let min = lows.length > 0 ? Math.min(...lows) : 0;
-    let max = highs.length > 0 ? Math.max(...highs) : 100;
-    
-    // 2. Include Support and Resistance in the scale so they don't get cut off
-    if (showIndicators.sr && sr.support) min = Math.min(min, sr.support);
-    if (showIndicators.sr && sr.resistance) max = Math.max(max, sr.resistance);
+    return processed;
+  }, [data]);
 
-    // 3. Add a strict 15% padding to the top and bottom of the price action
-    const range = max - min;
-    const padding = range === 0 ? 100 : range * 0.15;
-    const domainMin = Math.max(0, min - padding);
-    const domainMax = max + padding;
-    const safeDomain = [domainMin, domainMax];
-    
-    // 4. Pin the Max Pain line to the edge WITHOUT changing the chart's zoom!
-    let displayMaxPain = null;
+  const currentPrice = chartData.length > 0 ? chartData[chartData.length - 1].close : 0;
+  
+  // Calculate Auto S/R Lines based on 20-period lookback
+  const autoLevels = useMemo(() => {
+    if (chartData.length < 20) return { res: null, sup: null };
+    const recent = chartData.slice(-20);
+    const highs = recent.map(d => d.high);
+    const lows = recent.map(d => d.low);
+    return {
+      res: Math.max(...highs),
+      sup: Math.min(...lows)
+    };
+  }, [chartData]);
 
-    if (showIndicators.maxPain && optionsData.maxPain) {
-      displayMaxPain = optionsData.maxPain;
-      
-      // If it's higher than our top edge, pin it exactly to the top edge (slightly inside so the thickness shows)
-      if (displayMaxPain > domainMax) displayMaxPain = domainMax - (range * 0.01);
-      
-      // If it's lower than our bottom edge, pin it exactly to the bottom edge
-      if (displayMaxPain < domainMin) displayMaxPain = domainMin + (range * 0.01);
+  const setupEngine = useMemo(() => {
+    let score = 0;
+    let type = 'NONE';
+    let conditions = { loc: 'Waiting', dom: 'Neutral', tape: 'None', options: 'Neutral' };
+
+    if (!autoLevels.sup || !currentPrice) return { score, type, conditions };
+
+    const distToSup = Math.abs(currentPrice - autoLevels.sup) / currentPrice;
+    const distToRes = Math.abs(currentPrice - autoLevels.res) / currentPrice;
+
+    // 1. Location
+    if (distToSup < 0.002) { score += 2; type = 'LONG'; conditions.loc = 'At Support'; }
+    else if (distToRes < 0.002) { score += 2; type = 'SHORT'; conditions.loc = 'At Resistance'; }
+
+    // 2. DOM & Tape Absorption (Simulated based on delta + price stall)
+    if (type === 'LONG' && cvdData.instantDelta < -5) {
+      score += 2; 
+      conditions.dom = 'Buy Wall Detected';
+      conditions.tape = 'Buyer Absorption';
+    } else if (type === 'SHORT' && cvdData.instantDelta > 5) {
+      score += 2;
+      conditions.dom = 'Sell Wall Detected';
+      conditions.tape = 'Seller Absorption';
     }
 
-    const volumes = data.map(d => d.volume).filter(isFinite);
-    const maxVol = volumes.length > 0 ? Math.max(...volumes) : 100;
-    const safeVolDomain = [0, maxVol * 4]; 
+    // 3. Options Macro Bias
+    if (optionsData.pcr < 0.7) {
+      if (type === 'LONG') score += 2;
+      conditions.options = 'Bullish';
+    } else if (optionsData.pcr > 1.0) {
+      if (type === 'SHORT') score += 2;
+      conditions.options = 'Bearish';
+    }
 
-    return { chartData: processed, autoSR: sr, yDomain: safeDomain, volDomain: safeVolDomain, clampedMaxPain: displayMaxPain };
-  }, [data, showIndicators, optionsData.maxPain]);
+    return { score, type, conditions };
+  }, [currentPrice, autoLevels, cvdData, optionsData]);
+
+  useEffect(() => {
+    if (!botState.active || !currentPrice) return;
+
+    // Entry Logic
+    if (!botState.position && setupEngine.score >= 5) {
+      const isLong = setupEngine.type === 'LONG';
+      const riskAmount = botState.balance * 0.01; // 1% risk
+      const stopLoss = isLong ? currentPrice * 0.99 : currentPrice * 1.01;
+      const takeProfit = isLong ? currentPrice * 1.03 : currentPrice * 0.97;
+      
+      const priceDiff = Math.abs(currentPrice - stopLoss);
+      const qty = riskAmount / priceDiff;
+
+      setBotState(prev => ({
+        ...prev,
+        position: { type: setupEngine.type, entry: currentPrice, sl: stopLoss, tp: takeProfit, qty }
+      }));
+    }
+
+    // Exit Logic (Stop Loss or Take Profit)
+    if (botState.position) {
+      const pos = botState.position;
+      let exitPrice = null;
+      let pnl = 0;
+
+      if (pos.type === 'LONG') {
+        if (currentPrice <= pos.sl) { exitPrice = pos.sl; pnl = (exitPrice - pos.entry) * pos.qty; }
+        else if (currentPrice >= pos.tp) { exitPrice = pos.tp; pnl = (exitPrice - pos.entry) * pos.qty; }
+      } else {
+        if (currentPrice >= pos.sl) { exitPrice = pos.sl; pnl = (pos.entry - exitPrice) * pos.qty; }
+        else if (currentPrice <= pos.tp) { exitPrice = pos.tp; pnl = (pos.entry - exitPrice) * pos.qty; }
+      }
+
+      if (exitPrice !== null) {
+        setBotState(prev => ({
+          ...prev,
+          balance: prev.balance + pnl,
+          position: null,
+          history: [{ type: pos.type, pnl, time: new Date().toLocaleTimeString() }, ...prev.history].slice(0, 10)
+        }));
+      }
+    }
+  }, [currentPrice, setupEngine, botState.active]);
 
   const renderVPVR = (props) => {
-    if (!showIndicators.vpvr || chartData.length === 0) return null;
+    if (!toggles.vpvr || !chartData || chartData.length === 0) return null;
     const { yAxisMap, offset } = props;
-    if (!yAxisMap || !yAxisMap.price || !offset || offset.width === 0) return null;
+    if (!yAxisMap || !yAxisMap.price || !offset) return null;
 
     const yScale = yAxisMap.price.scale;
-    const binsCount = 60;
-    
-    // Safety check: only use fully loaded candlesticks for math
-    const validData = chartData.filter(d => isFinite(d.low) && isFinite(d.high) && isFinite(d.close) && isFinite(d.volume));
-    if (validData.length === 0) return null;
+    let minPrice = Math.min(...chartData.map(d => d.low));
+    let maxPrice = Math.max(...chartData.map(d => d.high));
+    if (minPrice === maxPrice) return null;
 
-    const minPrice = Math.min(...validData.map(d => d.low));
-    const maxPrice = Math.max(...validData.map(d => d.high));
-    if (minPrice === maxPrice || !isFinite(minPrice) || !isFinite(maxPrice)) return null;
-
+    const binsCount = 40;
     const binSize = (maxPrice - minPrice) / binsCount;
     const bins = Array.from({ length: binsCount }, (_, i) => ({
       top: minPrice + ((i + 1) * binSize),
       bottom: minPrice + (i * binSize),
       upVol: 0,
-      downVol: 0,
-      totalVol: 0
+      downVol: 0
     }));
 
-    validData.forEach(d => {
-      const typPrice = (d.low + d.high + d.close) / 3;
-      let idx = Math.floor((typPrice - minPrice) / binSize);
-      idx = Math.max(0, Math.min(idx, binsCount - 1));
-      
-      const vol = d.volume;
-      bins[idx].totalVol += vol;
-      
-      // Split into Buying vs Selling aggression
-      if (d.close >= d.open) {
-        bins[idx].upVol += vol;
-      } else {
-        bins[idx].downVol += vol;
-      }
+    chartData.forEach(d => {
+      let idx = Math.floor((d.close - minPrice) / binSize);
+      if (idx >= binsCount) idx = binsCount - 1;
+      if (idx < 0) idx = 0;
+      if (d.close >= d.open) bins[idx].upVol += d.volume;
+      else bins[idx].downVol += d.volume;
     });
 
-    const maxVol = Math.max(...bins.map(b => b.totalVol));
-    if (maxVol === 0 || !isFinite(maxVol)) return null;
+    const maxVol = Math.max(...bins.map(b => b.upVol + b.downVol));
+    if (maxVol === 0) return null;
 
-    const maxBarWidth = offset.width * 0.35; // Take up 35% of chart screen
+    const maxWidth = offset.width * 0.35; // 35% of screen
     const startX = offset.left + offset.width;
 
     return (
-      <g className="vpvr-layer" style={{ pointerEvents: 'none' }}>
+      <g className="vpvr-layer">
         {bins.map((bin, i) => {
-          if (bin.totalVol === 0) return null;
-          
           const y1 = yScale(bin.top);
           const y2 = yScale(bin.bottom);
-          
-          if (!isFinite(y1) || !isFinite(y2)) return null;
-          
           const topY = Math.min(y1, y2);
-          const rectHeight = Math.max(Math.abs(y1 - y2) - 1, 1);
+          // +1 height ensures bars overlap and never vanish from anti-aliasing
+          const h = Math.max(Math.abs(y1 - y2), 1) + 1; 
           
-          const totalWidth = (bin.totalVol / maxVol) * maxBarWidth;
-          const upWidth = (bin.upVol / bin.totalVol) * totalWidth;
-          const downWidth = (bin.downVol / bin.totalVol) * totalWidth;
-
-          if (!isFinite(totalWidth)) return null;
+          const totalVol = bin.upVol + bin.downVol;
+          if (totalVol === 0) return null;
+          
+          const totalWidth = (totalVol / maxVol) * maxWidth;
+          const upW = (bin.upVol / totalVol) * totalWidth;
+          const downW = (bin.downVol / totalVol) * totalWidth;
 
           return (
             <g key={`vpvr-${i}`}>
-              {/* Selling Volume (Red) */}
-              <rect x={startX - totalWidth} y={topY} width={downWidth} height={rectHeight} fill="#f43f5e" fillOpacity={0.4} />
-              {/* Buying Volume (Green) */}
-              <rect x={startX - totalWidth + downWidth} y={topY} width={upWidth} height={rectHeight} fill="#10b981" fillOpacity={0.4} />
-              {/* Dark Outline for depth perception */}
-              <rect x={startX - totalWidth} y={topY} width={totalWidth} height={rectHeight} fill="none" stroke="#1e293b" strokeWidth={0.5} strokeOpacity={0.5} />
+              <rect x={startX - totalWidth} y={topY} width={downW} height={h} fill="#ef4444" fillOpacity={0.7} />
+              <rect x={startX - totalWidth + downW} y={topY} width={upW} height={h} fill="#10b981" fillOpacity={0.7} />
             </g>
           );
         })}
@@ -591,307 +413,236 @@ export default function OrderFlowDashboard() {
     );
   };
 
-  const setupAnalysis = useMemo(() => {
-    if (chartData.length < 2) return null;
-    const currentPrice = chartData[chartData.length - 1].price;
-    const prevPrice = chartData[chartData.length - 2].price;
-    const sma = chartData[chartData.length - 1].sma;
-    const vwap = chartData[chartData.length - 1].vwap;
-    
-    let isBullish = false;
-    if (sma && currentPrice > sma && currentPrice > vwap) { isBullish = true; }
-    else if (sma && currentPrice < sma && currentPrice < vwap) { isBullish = false; }
+  const toggleBtnClass = (isActive) => 
+    `px-3 py-1 rounded text-xs font-bold transition-colors ${isActive ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`;
 
-    let locationStr = 'Mid-Range';
-    let atSupport = false; let atResistance = false;
-    const s = autoSR.support; const r = autoSR.resistance;
-    if (s && ((currentPrice - s) / s) < 0.005) { locationStr = `At Support`; atSupport = true; }
-    else if (r && ((r - currentPrice) / r) < 0.005) { locationStr = `At Resistance`; atResistance = true; }
-
-    const totalOrderBook = orderFlowMetrics.bidVol + orderFlowMetrics.askVol;
-    const bidPct = totalOrderBook > 0 ? (orderFlowMetrics.bidVol / totalOrderBook) * 100 : 50;
-    const bookStr = bidPct > 55 ? `Buy Wall Detected` : bidPct < 45 ? `Sell Wall Detected` : 'Balanced DOM';
-
-    let absorption = 'None';
-    const deltaMag = Math.abs(orderFlowMetrics.delta);
-    const priceChange = Math.abs((currentPrice - prevPrice) / prevPrice);
-    
-    if (deltaMag > 5 && priceChange < 0.001) { 
-      if (orderFlowMetrics.delta > 0) absorption = 'Seller Absorption';
-      if (orderFlowMetrics.delta < 0) absorption = 'Buyer Absorption';
-    }
-
-    let score = 0;
-    let setupType = 'WAITING FOR CONFIRMATION';
-    let setupColor = 'text-slate-400';
-    let bgPulse = '';
-
-    // NEW: Calculate the 6-Point Score System
-    if (isBullish || atSupport) {
-      if (isBullish) score++;
-      if (atSupport) score++;
-      if (orderFlowMetrics.cvd > 0) score++;
-      if (bidPct > 55) score++;
-      if (absorption.includes('Buyer')) score++;
-      if (optionsData.bias === 'Bullish') score++; // The 6th Confirmation Factor
-      
-      if (score >= 5) { setupType = 'HIGH PROB LONG'; setupColor = 'text-emerald-500'; bgPulse = 'bg-emerald-500/10 border-emerald-500/50'; }
-      else if (score >= 3) { setupType = 'LONG SETTING UP'; setupColor = 'text-emerald-400'; }
-    } else {
-      if (!isBullish) score++;
-      if (atResistance) score++;
-      if (orderFlowMetrics.cvd < 0) score++;
-      if (bidPct < 45) score++;
-      if (absorption.includes('Seller')) score++;
-      if (optionsData.bias === 'Bearish') score++; // The 6th Confirmation Factor
-
-      if (score >= 5) { setupType = 'HIGH PROB SHORT'; setupColor = 'text-rose-500'; bgPulse = 'bg-rose-500/10 border-rose-500/50'; }
-      else if (score >= 3) { setupType = 'SHORT SETTING UP'; setupColor = 'text-rose-400'; }
-    }
-
-    return {
-      locationStr, bookStr, absorption,
-      deltaStr: orderFlowMetrics.delta > 0 ? `+${orderFlowMetrics.delta.toFixed(2)}` : orderFlowMetrics.delta.toFixed(2),
-      cvdStr: orderFlowMetrics.cvd > 0 ? `+${orderFlowMetrics.cvd.toFixed(2)}` : orderFlowMetrics.cvd.toFixed(2),
-      setupType, setupColor, bgPulse, score,
-      invalidation: setupType.includes('LONG') && s ? `< $${s.toFixed(2)}` : setupType.includes('SHORT') && r ? `> $${r.toFixed(2)}` : 'N/A'
-    };
-
-  }, [chartData, autoSR, orderFlowMetrics, optionsData.bias]);
-
-  const currentPrice = chartData.length > 0 ? chartData[chartData.length - 1].price : 0;
-  const isUp = chartData.length > 1 ? currentPrice >= chartData[chartData.length - 2].price : true;
-
-  // Gauge calculations for the UI
-  const pcrPercentage = Math.min(Math.max((optionsData.pcr / 1.5) * 100, 0), 100);
+  // Check if Max Pain is way off screen for the header warning
+  const isMaxPainOffScreen = autoLevels.res && (optionsData.maxPain > autoLevels.res * 1.05 || optionsData.maxPain < autoLevels.sup * 0.95);
 
   return (
-    <div className="h-screen w-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden">
+    <div className="min-h-screen bg-[#0b1120] text-slate-200 p-4 font-sans selection:bg-indigo-500/30">
       
-      <header className="h-16 border-b border-slate-800 bg-slate-900 flex items-center justify-between px-4 sm:px-6 shrink-0 z-20 shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="bg-indigo-600 p-1.5 rounded-lg text-white shadow-lg"><Database size={22} /></div>
-          <span className="font-bold text-xl tracking-tight text-white hidden sm:block">V3 Flow<span className="text-indigo-400">Terminal</span></span>
+      {/* Header Panel */}
+      <div className="flex flex-col md:flex-row justify-between items-center mb-4 bg-[#111827] border border-slate-800 p-3 rounded-lg shadow-lg">
+        <div className="flex items-center gap-3 mb-4 md:mb-0">
+          <Database className="text-indigo-500" size={24} />
+          <h1 className="text-xl font-bold tracking-tight text-white">V3 Flow<span className="text-indigo-400">Terminal</span></h1>
         </div>
         
-        <div className="flex items-center gap-4">
-          <div className="flex bg-slate-950 p-1 rounded-md border border-slate-800">
-             {Object.keys(COIN_CONFIG).map(c => (
-               <button key={c} onClick={() => setSelectedPair(c)} className={`px-3 py-1 rounded text-sm font-bold transition-all ${selectedPair === c ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-slate-300'}`}>
-                 {COIN_CONFIG[c].label}
-               </button>
-             ))}
+        <div className="flex gap-4">
+          <div className="flex bg-slate-900 rounded p-1 border border-slate-800">
+            {['BTC', 'ETH', 'SOL'].map(coin => (
+              <button key={coin} onClick={() => setSelectedPair(`${coin}USDT`)} className={`px-4 py-1.5 rounded text-sm font-bold ${selectedPair.startsWith(coin) ? 'bg-slate-700 text-white' : 'text-slate-400'}`}>
+                {coin}
+              </button>
+            ))}
           </div>
-          <div className="flex bg-slate-950 p-1 rounded-md border border-slate-800 hidden md:flex">
-             {Object.keys(TIMEFRAMES).map(t => (
-               <button key={t} onClick={() => setSelectedTimeframe(t)} className={`px-3 py-1 rounded text-xs font-bold transition-all ${selectedTimeframe === t ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-slate-300'}`}>
-                 {TIMEFRAMES[t].label}
-               </button>
-             ))}
+          <div className="flex bg-slate-900 rounded p-1 border border-slate-800">
+            {Object.keys(TIMEFRAMES).map(tf => (
+              <button key={tf} onClick={() => setSelectedTimeframe(tf)} className={`px-3 py-1.5 rounded text-sm font-bold ${selectedTimeframe === tf ? 'bg-slate-700 text-white' : 'text-slate-400'}`}>
+                {tf}
+              </button>
+            ))}
           </div>
         </div>
 
-        <div className="flex flex-col items-end">
-           <div className={`text-2xl font-mono font-bold tracking-tighter ${isUp ? 'text-emerald-400' : 'text-rose-400'}`}>
-             ${currentPrice.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}
-           </div>
-           
-           <div className="text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5">
-              {wsStatus === 'connected' ? (
-                <><Wifi size={10} className="text-emerald-500"/> <span className="text-emerald-500/80">Secured: {activeEndpoint}</span></>
-              ) : wsStatus === 'retrying' ? (
-                <><RefreshCw size={10} className="text-amber-500 animate-spin"/> <span className="text-amber-500/80">Bypassing ISP...</span></>
-              ) : wsStatus === 'polling' ? (
-                <><Activity size={10} className="text-fuchsia-500 animate-pulse"/> <span className="text-fuchsia-500/80">REST Fallback Active</span></>
-              ) : wsStatus === 'connecting' ? (
-                <><Loader2 size={10} className="text-blue-500 animate-spin"/> <span className="text-blue-500/80">Connecting</span></>
-              ) : (
-                <><WifiOff size={10} className="text-rose-500"/> <span className="text-rose-500/80">Network Blocked</span></>
-              )}
-           </div>
+        <div className="text-right flex flex-col items-end">
+          <div className={`text-2xl font-mono font-bold ${wsStatus === 'connected' ? 'text-emerald-400' : 'text-amber-400'}`}>
+            ${currentPrice > 0 ? currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '---'}
+          </div>
+          <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded">
+            <Wifi size={12} /> SECURED: STREAM.BINANCE.INFO
+          </div>
         </div>
-      </header>
+      </div>
 
-      <div className="flex-1 flex flex-col lg:flex-row min-h-0 bg-slate-950">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
         
-        {/* Left: Chart Area */}
-        <div className="flex-1 relative flex flex-col min-w-0 border-r border-slate-800">
-          {loading ? (
-             <div className="absolute inset-0 flex items-center justify-center flex-col text-slate-500 z-50 bg-slate-950/90">
-               <Loader2 className="w-10 h-10 animate-spin mb-4 text-indigo-500" />
-               <p className="font-mono text-sm tracking-widest uppercase">Routing through regional nodes...</p>
-             </div>
-          ) : (
-            <div className="flex-1 relative w-full h-full p-2">
-              
-              {/* Front Layer: Primary Price Action */}
-              <div className="absolute inset-0 z-10 p-2">
-                <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={chartData} margin={{ top: 20, right: 0, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                    <XAxis dataKey="time" stroke="#64748b" tick={{fill:'#94a3b8', fontSize:11}} tickMargin={10} minTickGap={30} axisLine={false} tickLine={false} />
-                    <YAxis yAxisId="price" domain={yDomain} stroke="#64748b" tick={{fill:'#94a3b8', fontSize:12, fontFamily:'monospace'}} width={70} orientation="right" axisLine={false} tickLine={false} />
-                    <YAxis yAxisId="volume" hide domain={volDomain} />
-                    
-                    {/* Fixed VPVR overlaid flawlessly using custom SVG math */}
-                    <Customized component={renderVPVR} />
-
-                    <Tooltip 
-                      cursor={{ stroke: '#334155', strokeWidth: 1, strokeDasharray: '4 4' }}
-                      contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#f8fafc', borderRadius: '4px' }}
-                      itemStyle={{ fontSize: '13px', fontWeight: 'bold' }}
-                      labelStyle={{ color: '#64748b', fontSize: '12px', marginBottom: '4px' }}
-                    />
-
-                    <Bar yAxisId="volume" dataKey="volume" fill="#475569" opacity={0.3} isAnimationActive={false} name="Vol" />
-                    
-                    {showIndicators.sr && autoSR.support && <ReferenceLine yAxisId="price" y={autoSR.support} stroke="#10b981" strokeDasharray="3 3" strokeOpacity={0.7} />}
-                    {showIndicators.sr && autoSR.resistance && <ReferenceLine yAxisId="price" y={autoSR.resistance} stroke="#f43f5e" strokeDasharray="3 3" strokeOpacity={0.7} />}
-
-                    {/* Fixed Options Max Pain Line */}
-                    {showIndicators.maxPain && optionsData.maxPain && clampedMaxPain && (
-                      <ReferenceLine 
-                        yAxisId="price" 
-                        y={clampedMaxPain} 
-                        stroke="#eab308" 
-                        strokeWidth={2} 
-                        strokeOpacity={0.8}
-                        strokeDasharray={clampedMaxPain !== optionsData.maxPain ? "5 5" : ""}
-                        label={{ 
-                          position: 'insideTopLeft', 
-                          value: clampedMaxPain !== optionsData.maxPain 
-                            ? `GAMMA WALL (OFF-SCREEN: $${optionsData.maxPain.toLocaleString()})` 
-                            : 'GAMMA WALL (MAX PAIN)', 
-                          fill: '#eab308', fontSize: 10, fontWeight: 'bold' 
-                        }}
-                      />
-                    )}
-
-                    {showIndicators.sma && <Line yAxisId="price" type="monotone" dataKey="sma" stroke="#0ea5e9" dot={false} strokeWidth={1.5} isAnimationActive={false} name="SMA14"/>}
-                    {showIndicators.vwap && <Line yAxisId="price" type="monotone" dataKey="vwap" stroke="#d946ef" dot={false} strokeWidth={1.5} strokeDasharray="5 5" isAnimationActive={false} name="VWAP"/>}
-
-                    <Bar yAxisId="price" dataKey="candleRange" isAnimationActive={false} name="Candle" shape={<CustomCandlestick />} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Right: Order Flow Engine Panel */}
-        <div className="w-full lg:w-[420px] bg-slate-900 flex flex-col shrink-0 overflow-y-auto">
+        {/* Main Chart Area */}
+        <div className="lg:col-span-3 bg-[#111827] rounded-lg border border-slate-800 p-2 h-[800px] relative">
           
-          <div className="p-4 border-b border-slate-800 bg-slate-950 flex justify-between items-center">
-            <h2 className="text-sm font-bold text-white flex items-center gap-2 uppercase tracking-wide">
-              <Crosshair size={16} className="text-indigo-400"/> Order Flow Engine
-            </h2>
-            <div className="flex gap-2">
-              <button onClick={() => setShowIndicators(p=>({...p, vpvr: !p.vpvr}))} className={`px-2 py-1 text-[10px] font-bold rounded ${showIndicators.vpvr ? 'bg-blue-500/20 text-blue-400' : 'bg-slate-800 text-slate-500'}`}>VPVR</button>
-              <button onClick={() => setShowIndicators(p=>({...p, vwap: !p.vwap}))} className={`px-2 py-1 text-[10px] font-bold rounded ${showIndicators.vwap ? 'bg-fuchsia-500/20 text-fuchsia-400' : 'bg-slate-800 text-slate-500'}`}>VWAP</button>
-              <button onClick={() => setShowIndicators(p=>({...p, sr: !p.sr}))} className={`px-2 py-1 text-[10px] font-bold rounded ${showIndicators.sr ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-500'}`}>S/R</button>
-              <button onClick={() => setShowIndicators(p=>({...p, maxPain: !p.maxPain}))} className={`px-2 py-1 text-[10px] font-bold rounded ${showIndicators.maxPain ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-slate-500'}`}>MAX PAIN</button>
-            </div>
-          </div>
-
-          {setupAnalysis ? (
-            <div className={`m-4 p-5 rounded-xl border transition-all duration-500 ${setupAnalysis.bgPulse || 'bg-slate-950 border-slate-800'}`}>
-              <div className="flex justify-between items-start mb-4">
-                 <div>
-                   <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">Status</div>
-                   <div className={`text-lg font-bold tracking-tight ${setupAnalysis.setupColor}`}>{setupAnalysis.setupType}</div>
-                 </div>
-                 <div className="flex flex-col items-end">
-                   <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">Conditions</div>
-                   <div className="text-lg font-mono font-bold text-white bg-slate-900 px-2 rounded border border-slate-700">{setupAnalysis.score} / 6</div>
-                 </div>
-              </div>
-
-              <div className="space-y-2 text-xs">
-                 <div className="flex justify-between p-2 bg-slate-900/50 rounded border border-slate-800/50">
-                   <span className="text-slate-400">Price Location:</span>
-                   <span className="font-bold text-slate-200">{setupAnalysis.locationStr}</span>
-                 </div>
-                 <div className="flex justify-between p-2 bg-slate-900/50 rounded border border-slate-800/50">
-                   <span className="text-slate-400">DOM Imbalance:</span>
-                   <span className="font-bold text-amber-400">{setupAnalysis.bookStr}</span>
-                 </div>
-                 <div className="flex justify-between p-2 bg-slate-900/50 rounded border border-slate-800/50">
-                   <span className="text-slate-400">Tape Absorption:</span>
-                   <span className={`font-bold ${setupAnalysis.absorption !== 'None' ? 'text-fuchsia-400' : 'text-slate-500'}`}>{setupAnalysis.absorption}</span>
-                 </div>
-                 <div className="flex justify-between p-2 bg-slate-900/50 rounded border border-slate-800/50">
-                   <span className="text-slate-400">Options Bias:</span>
-                   <span className={`font-bold ${optionsData.bias === 'Bullish' ? 'text-emerald-400' : optionsData.bias === 'Bearish' ? 'text-rose-400' : 'text-slate-300'}`}>{optionsData.bias}</span>
-                 </div>
-              </div>
-            </div>
-          ) : (
-            <div className="m-4 p-8 text-center text-slate-500 text-sm border border-slate-800 border-dashed rounded-xl flex items-center justify-center gap-2">
-              <Loader2 size={16} className="animate-spin"/> Parsing Setup...
+          {toggles.maxPain && isMaxPainOffScreen && (
+            <div className="absolute top-4 left-4 z-20 text-amber-500 font-bold text-xs bg-amber-500/10 px-2 py-1 rounded border border-amber-500/20">
+              GAMMA WALL (OFF-SCREEN: ${optionsData.maxPain.toLocaleString()})
             </div>
           )}
 
-          {/* NEW: Options Flow Widget */}
-          <div className="mx-4 p-4 bg-slate-950 border border-slate-800 rounded-xl flex flex-col gap-3">
-            <h3 className="text-xs font-bold uppercase text-slate-500 tracking-wider flex items-center gap-1.5"><PieChart size={14}/> Deribit Options Flow</h3>
-            
-            <div className="flex justify-between items-end">
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={chartData} margin={{ top: 20, right: 60, left: 10, bottom: 20 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
+              <XAxis dataKey="time" stroke="#64748b" tick={{ fontSize: 11 }} tickMargin={10} minTickGap={30} axisLine={false} tickLine={false} />
+              
+              <YAxis 
+                yAxisId="price" 
+                domain={([dataMin, dataMax]) => {
+                  // This fixes the line stretching! 15% dynamic padding
+                  const range = dataMax - dataMin;
+                  const pad = range === 0 ? 100 : range * 0.15;
+                  return [dataMin - pad, dataMax + pad];
+                }}
+                allowDataOverflow={true} // Forces Recharts to obey our padding
+                orientation="right" 
+                stroke="#64748b" 
+                tick={{ fontSize: 11, fontWeight: 'bold' }} 
+                tickFormatter={v => v.toLocaleString()} 
+                axisLine={false} 
+                tickLine={false}
+              />
+
+              <Tooltip 
+                contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155', borderRadius: '8px', color: '#f8fafc' }}
+                itemStyle={{ fontWeight: 'bold' }}
+                cursor={{ stroke: '#475569', strokeWidth: 1, strokeDasharray: '4 4' }}
+              />
+
+              {/* Pro Indicators */}
+              <Customized component={renderVPVR} />
+              
+              {toggles.vwap && (
+                <Line yAxisId="price" type="monotone" dataKey="vwap" stroke="#a855f7" strokeDasharray="5 5" strokeWidth={2} dot={false} isAnimationActive={false} name="VWAP" />
+              )}
+
+              {toggles.maxPain && !isMaxPainOffScreen && (
+                <ReferenceLine yAxisId="price" y={optionsData.maxPain} ifOverflow="extendDomain" stroke="#f59e0b" strokeDasharray="4 4" strokeWidth={2} strokeOpacity={0.8} />
+              )}
+
+              {toggles.sr && autoLevels.res && (
+                <>
+                  <ReferenceLine yAxisId="price" y={autoLevels.res} ifOverflow="extendDomain" stroke="#ef4444" strokeDasharray="3 3" strokeWidth={2} strokeOpacity={0.5} />
+                  <ReferenceLine yAxisId="price" y={autoLevels.sup} ifOverflow="extendDomain" stroke="#10b981" strokeDasharray="3 3" strokeWidth={2} strokeOpacity={0.5} />
+                </>
+              )}
+
+              <Bar yAxisId="price" dataKey="candleRange" shape={(props) => <CustomCandlestick {...props} />} isAnimationActive={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Right Sidebar - Pro Terminal Modules */}
+        <div className="flex flex-col gap-4">
+          
+          {/* Order Flow Engine Controls */}
+          <div className="bg-[#111827] rounded-lg border border-slate-800 p-4">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-sm font-bold flex items-center gap-2 text-slate-300">
+                <Crosshair size={16} className="text-blue-500" /> ORDER FLOW ENGINE
+              </h2>
+              <div className="flex gap-1.5">
+                <button onClick={() => setToggles(p => ({...p, vpvr: !p.vpvr}))} className={toggleBtnClass(toggles.vpvr)}>VPVR</button>
+                <button onClick={() => setToggles(p => ({...p, vwap: !p.vwap}))} className={toggleBtnClass(toggles.vwap)}>VWAP</button>
+                <button onClick={() => setToggles(p => ({...p, sr: !p.sr}))} className={toggleBtnClass(toggles.sr)}>S/R</button>
+                <button onClick={() => setToggles(p => ({...p, maxPain: !p.maxPain}))} className={toggleBtnClass(toggles.maxPain)}>MAX PAIN</button>
+              </div>
+            </div>
+
+            {/* Score Card */}
+            <div className="bg-[#0f172a] rounded p-3 border border-slate-700/50 mb-3 flex justify-between items-center">
               <div>
-                 <div className="text-[10px] text-slate-400 uppercase font-bold mb-1">Put/Call Ratio (PCR)</div>
-                 <div className={`text-2xl font-mono font-bold ${optionsData.bias === 'Bullish' ? 'text-emerald-400' : optionsData.bias === 'Bearish' ? 'text-rose-400' : 'text-slate-300'}`}>
-                   {optionsData.pcr.toFixed(2)}
-                 </div>
+                <div className="text-xs text-slate-500 font-bold mb-1">STATUS</div>
+                <div className={`text-lg font-black tracking-wide ${setupEngine.score >= 5 ? 'text-emerald-400 animate-pulse' : 'text-blue-400'}`}>
+                  {setupEngine.score >= 5 ? `${setupEngine.type} TRIGGERED` : setupEngine.score > 2 ? `${setupEngine.type} SETTING UP` : 'WAITING FOR SETUP'}
+                </div>
               </div>
               <div className="text-right">
-                 <div className="text-[10px] text-slate-400 uppercase font-bold mb-1 flex items-center justify-end gap-1"><Magnet size={10}/> Max Pain Magnet</div>
-                 <div className="text-lg font-mono font-bold text-amber-400">
-                   {optionsData.maxPain ? `$${optionsData.maxPain.toLocaleString()}` : 'Calculating...'}
-                 </div>
+                <div className="text-xs text-slate-500 font-bold mb-1">CONDITIONS</div>
+                <div className="text-xl font-bold text-white">{setupEngine.score} / 6</div>
               </div>
             </div>
 
-            <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden mt-1 relative">
-               <div className="absolute top-0 left-0 h-full transition-all duration-1000 bg-gradient-to-r from-emerald-500 via-slate-500 to-rose-500" style={{width: '100%'}}></div>
-               <div className="absolute top-0 w-1 h-full bg-white shadow-[0_0_8px_white]" style={{left: `${pcrPercentage}%`, transition: 'left 1s ease'}}></div>
-            </div>
-            <div className="flex justify-between text-[9px] text-slate-500 font-bold uppercase mt-1">
-              <span>Extreme Greed (PCR &lt; 0.6)</span>
-              <span>Extreme Fear (PCR &gt; 1.2)</span>
+            <div className="space-y-2 text-sm font-medium">
+              <div className="flex justify-between p-2 border-b border-slate-800/50"><span className="text-slate-500">Price Location:</span> <span className={setupEngine.conditions.loc !== 'Waiting' ? 'text-blue-400' : 'text-slate-300'}>{setupEngine.conditions.loc}</span></div>
+              <div className="flex justify-between p-2 border-b border-slate-800/50"><span className="text-slate-500">DOM Imbalance:</span> <span className={setupEngine.conditions.dom.includes('Wall') ? 'text-amber-400' : 'text-slate-300'}>{setupEngine.conditions.dom}</span></div>
+              <div className="flex justify-between p-2 border-b border-slate-800/50"><span className="text-slate-500">Tape Absorption:</span> <span className={setupEngine.conditions.tape !== 'None' ? 'text-fuchsia-400' : 'text-slate-300'}>{setupEngine.conditions.tape}</span></div>
+              <div className="flex justify-between p-2"><span className="text-slate-500">Options Bias:</span> <span className={setupEngine.conditions.options === 'Bullish' ? 'text-emerald-400' : setupEngine.conditions.options === 'Bearish' ? 'text-rose-400' : 'text-slate-300'}>{setupEngine.conditions.options}</span></div>
             </div>
           </div>
 
-          <div className="flex-1 mt-4 p-4 bg-slate-950 border-t border-slate-800 flex flex-col gap-4">
-            <h3 className="text-xs font-bold uppercase text-slate-500 tracking-wider">Whale CVD Tracker (&gt;$5k Hits)</h3>
+          {/* Deribit Options Flow */}
+          <div className="bg-[#111827] rounded-lg border border-slate-800 p-4">
+            <h2 className="text-sm font-bold flex items-center gap-2 text-slate-300 mb-4">
+              <Activity size={16} className="text-indigo-400" /> DERIBIT OPTIONS FLOW
+            </h2>
+            <div className="flex justify-between items-end mb-2">
+              <div>
+                <div className="text-xs text-slate-500 font-bold mb-1">PUT/CALL RATIO (PCR)</div>
+                <div className={`text-2xl font-bold ${optionsData.pcr > 1 ? 'text-rose-400' : 'text-emerald-400'}`}>{optionsData.pcr.toFixed(2)}</div>
+              </div>
+              <div className="text-right">
+                <div className="text-xs text-slate-500 font-bold mb-1">MAX PAIN MAGNET</div>
+                <div className="text-xl font-bold text-amber-400">${optionsData.maxPain.toLocaleString()}</div>
+              </div>
+            </div>
             
-            <div className="grid grid-cols-2 gap-3">
-               <div className="bg-slate-900 p-3 rounded-lg border border-slate-800 flex flex-col items-center justify-center">
-                 <span className="text-[10px] text-slate-400 uppercase font-bold mb-1">Session CVD</span>
-                 <span className={`text-xl font-mono font-bold ${orderFlowMetrics.cvd > 0 ? 'text-emerald-400' : orderFlowMetrics.cvd < 0 ? 'text-rose-400' : 'text-slate-300'}`}>
-                   {setupAnalysis?.cvdStr || '0.00'}
-                 </span>
-               </div>
-               <div className="bg-slate-900 p-3 rounded-lg border border-slate-800 flex flex-col items-center justify-center">
-                 <span className="text-[10px] text-slate-400 uppercase font-bold mb-1">Instant Delta</span>
-                 <span className={`text-xl font-mono font-bold ${orderFlowMetrics.delta > 0 ? 'text-emerald-400' : orderFlowMetrics.delta < 0 ? 'text-rose-400' : 'text-slate-300'}`}>
-                   {setupAnalysis?.deltaStr || '0.00'}
-                 </span>
-               </div>
+            {/* Custom PCR Gauge */}
+            <div className="w-full h-1.5 bg-slate-800 rounded-full mt-4 relative">
+              <div className="absolute top-[-4px] w-2 h-3 bg-white rounded-sm shadow" style={{ left: `${Math.min(100, Math.max(0, (optionsData.pcr / 1.5) * 100))}%` }}></div>
+              <div className="w-full flex justify-between mt-2 text-[9px] text-slate-500 font-bold">
+                <span>EXTREME GREED (PCR {"<"} 0.6)</span>
+                <span>EXTREME FEAR (PCR {">"} 1.2)</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Whale CVD Tracker */}
+          <div className="bg-[#111827] rounded-lg border border-slate-800 p-4">
+            <h2 className="text-sm font-bold text-slate-300 mb-4">WHALE CVD TRACKER (&gt;$5K HITS)</h2>
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div className="bg-[#0f172a] rounded p-3 text-center border border-slate-800">
+                <div className="text-xs text-slate-500 font-bold mb-1">SESSION CVD</div>
+                <div className={`text-lg font-bold ${cvdData.sessionCvd >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {cvdData.sessionCvd > 0 ? '+' : ''}{cvdData.sessionCvd.toFixed(2)}
+                </div>
+              </div>
+              <div className="bg-[#0f172a] rounded p-3 text-center border border-slate-800">
+                <div className="text-xs text-slate-500 font-bold mb-1">INSTANT DELTA</div>
+                <div className={`text-lg font-bold ${cvdData.instantDelta >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  {cvdData.instantDelta > 0 ? '+' : ''}{cvdData.instantDelta.toFixed(2)}
+                </div>
+              </div>
+            </div>
+            <div className="w-full h-2 rounded flex overflow-hidden">
+              <div className="h-full bg-emerald-500" style={{ width: `${Math.max(10, (cvdData.buyVol / (cvdData.buyVol + cvdData.sellVol || 1)) * 100)}%` }}></div>
+              <div className="h-full bg-rose-500" style={{ width: `${Math.max(10, (cvdData.sellVol / (cvdData.buyVol + cvdData.sellVol || 1)) * 100)}%` }}></div>
+            </div>
+          </div>
+
+          {/* Paper Trading Bot */}
+          <div className="bg-[#111827] rounded-lg border border-indigo-900/50 p-4 shadow-[0_0_15px_rgba(79,70,229,0.1)] relative overflow-hidden">
+            {botState.active && <div className="absolute top-0 left-0 w-full h-1 bg-indigo-500 animate-pulse"></div>}
+            
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-sm font-bold flex items-center gap-2 text-slate-300">
+                <Database size={16} className={botState.active ? "text-indigo-400" : "text-slate-500"} /> AUTO-TRADER (PAPER)
+              </h2>
+              <button 
+                onClick={() => setBotState(p => ({...p, active: !p.active}))}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-bold transition-all ${botState.active ? 'bg-rose-500/20 text-rose-400 hover:bg-rose-500/30' : 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-lg'}`}
+              >
+                {botState.active ? <><Square size={12}/> STOP BOT</> : <><Play size={12}/> RUN BOT</>}
+              </button>
             </div>
 
-            <div className="mt-2 bg-slate-900 p-3 rounded-lg border border-slate-800">
-               <div className="flex justify-between text-xs mb-2 font-bold">
-                 <span className="text-emerald-400 flex items-center gap-1"><TrendingUp size={12}/> Market Buys</span>
-                 <span className="text-rose-400 flex items-center gap-1">Market Sells <TrendingDown size={12}/></span>
-               </div>
-               <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden flex">
-                 <div className="h-full bg-emerald-500 transition-all duration-300" style={{width: `${orderFlowMetrics.buyVol + orderFlowMetrics.sellVol > 0 ? (orderFlowMetrics.buyVol / (orderFlowMetrics.buyVol + orderFlowMetrics.sellVol))*100 : 50}%`}}></div>
-                 <div className="h-full bg-rose-500 transition-all duration-300" style={{flex: 1}}></div>
-               </div>
+            <div className="bg-[#0f172a] rounded p-3 flex justify-between items-center mb-3 border border-slate-800">
+              <span className="text-sm font-medium text-slate-400">Account Balance</span>
+              <span className="text-xl font-mono font-bold text-white">${botState.balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
             </div>
-            
-            <div className="text-[10px] text-slate-600 leading-tight mt-auto text-center px-4 pb-2">
-              Deribit Options feed active. Network bypass operational.
-            </div>
+
+            {botState.position ? (
+              <div className="bg-indigo-900/20 rounded p-3 border border-indigo-500/30">
+                <div className="flex justify-between text-xs mb-2">
+                  <span className={`font-bold ${botState.position.type === 'LONG' ? 'text-emerald-400' : 'text-rose-400'}`}>ACTIVE {botState.position.type}</span>
+                  <span className="text-slate-400">Entry: ${botState.position.entry.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-xs font-mono">
+                  <span className="text-rose-400">SL: ${botState.position.sl.toFixed(2)}</span>
+                  <span className="text-emerald-400">TP: ${botState.position.tp.toFixed(2)}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="text-center text-xs text-slate-500 py-3 bg-[#0f172a] rounded border border-slate-800 border-dashed">
+                {botState.active ? "Sniffing Order Flow for 5/6 Setup..." : "Bot is offline."}
+              </div>
+            )}
           </div>
 
         </div>

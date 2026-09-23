@@ -1,1071 +1,815 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   ResponsiveContainer, 
-  ComposedChart,
-  BarChart, 
+  ComposedChart, 
   Line,
   Bar, 
   XAxis, 
   YAxis, 
   CartesianGrid, 
   Tooltip, 
-  ReferenceLine
+  Legend,
+  ReferenceLine,
+  BarChart
 } from 'recharts';
 import { 
   Activity, 
+  Wifi, 
+  WifiOff, 
   Loader2, 
   TrendingUp, 
-  Newspaper,
-  Clock,
-  List,
-  Layers,
-  Settings,
   TrendingDown,
-  Bot,
-  Wallet,
-  History,
-  BrainCircuit
+  Crosshair,
+  Database,
+  RefreshCw,
+  PieChart,
+  Magnet
 } from 'lucide-react';
 
-// --- Universal API Router (Bypasses ISP Blocks) ---
-const fetchBinance = async (endpoint) => {
-  const endpoints = [
-    'https://data-api.binance.vision', 
-    'https://api1.binance.com',
-    'https://api2.binance.com',
-    'https://api3.binance.com',
-    'https://api.binance.com'
-  ];
-  
-  for (let base of endpoints) {
-    try {
-      const res = await fetch(`${base}${endpoint}`);
-      if (res.ok) return res;
-    } catch (err) {
-      // Silently fail and try the next backup server
-    }
-  }
-  throw new Error('All Binance APIs failed or are blocked.');
-};
-
-// --- Crash Catcher (Error Boundary) ---
-class ErrorBoundary extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-  static getDerivedStateFromError(error) {
-    return { hasError: true, error };
-  }
-  componentDidCatch(error, errorInfo) {
-    console.error("Dashboard caught an error:", error, errorInfo);
-  }
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div className="h-screen w-screen bg-[#131722] text-[#D1D4DC] p-10 flex flex-col items-center justify-center font-sans">
-          <div className="bg-[#1E222D] p-8 rounded-xl border border-[#F23645]/50 max-w-2xl w-full shadow-2xl">
-            <h1 className="text-2xl font-bold text-[#F23645] mb-4 flex items-center gap-2">
-              <Activity /> Dashboard Crash Prevented
-            </h1>
-            <p className="text-[#D1D4DC] mb-4">An indicator encountered invalid data before it could load. Here is the exact error:</p>
-            <pre className="bg-[#131722] p-4 rounded text-sm text-[#F23645] overflow-x-auto border border-[#2A2E39] mb-6">
-              {this.state.error && this.state.error.toString()}
-            </pre>
-            <button 
-              onClick={() => window.location.reload()}
-              className="px-6 py-2.5 bg-[#2962FF] hover:bg-[#1E4BD8] text-white rounded font-bold transition-colors shadow-lg"
-            >
-              Reload Dashboard
-            </button>
-          </div>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
-const formatNumber = (num, minDec = 2, maxDec = 2) => {
-  if (num === undefined || num === null || isNaN(num)) return '0.00';
-  return Number(num).toLocaleString(undefined, { minimumFractionDigits: minDec, maximumFractionDigits: maxDec });
-};
-
-const TV_COLORS = {
-  bg: '#131722',
-  panel: '#1E222D',
-  border: '#2A2E39',
-  text: '#D1D4DC',
-  textMuted: '#787B86',
-  green: '#089981',
-  red: '#F23645',
-  blue: '#2962FF'
-};
-
-// --- Custom Candlestick Renderer ---
+// Safe Candlestick Graphic
 const CustomCandlestick = (props) => {
-  const { x, y, width, height, payload, isHeikinAshi } = props;
+  const { x, y, width, height, payload } = props;
   if (!payload) return null;
-  const o = isHeikinAshi ? payload.haOpen : payload.open;
-  const c = isHeikinAshi ? payload.haClose : payload.close;
-  const h = isHeikinAshi ? payload.haHigh : payload.high;
-  const l = isHeikinAshi ? payload.haLow : payload.low;
-  if (typeof o !== 'number' || !isFinite(x) || !isFinite(y) || !isFinite(width) || !isFinite(height)) return null;
-
-  const isUp = c >= o;
-  const color = isUp ? TV_COLORS.green : TV_COLORS.red; 
+  
+  const isBull = payload.close >= payload.open;
+  const color = isBull ? '#10b981' : '#f43f5e';
+  const h = payload.high; 
+  const l = payload.low; 
+  const o = payload.open; 
+  const c = payload.close;
   const range = h - l;
-  if (range === 0 || !isFinite(range)) return <line x1={x} y1={y} x2={x + width} y2={y} stroke={color} strokeWidth={2} />;
-
-  const ratio = height / range;
-  const openY = y + (h - o) * ratio;
-  const closeY = y + (h - c) * ratio;
-  const topY = Math.min(openY, closeY);
-  const bottomY = Math.max(openY, closeY);
-  const bodyHeight = Math.max(bottomY - topY, 2); 
-
+  
+  if (range === 0 || !isFinite(range)) {
+    return <line x1={x} y1={y} x2={x+width} y2={y} stroke={color}/>;
+  }
+  
+  const r = height / range;
+  const ty = Math.min(y + (h - o)*r, y + (h - c)*r);
+  const by = Math.max(y + (h - o)*r, y + (h - c)*r);
+  
   return (
     <g>
-      <line x1={x + width / 2} y1={y} x2={x + width / 2} y2={y + height} stroke={color} strokeWidth={1} />
-      <rect x={x + width * 0.15} y={topY} width={width * 0.7} height={bodyHeight} fill={color} stroke={color} />
+      <line x1={x+width/2} y1={y} x2={x+width/2} y2={y+height} stroke={color} />
+      <rect x={x+width*0.2} y={ty} width={width*0.6} height={Math.max(by-ty, 2)} fill={color} stroke={color}/>
     </g>
   );
 };
 
-// --- Indicator Math Functions ---
-const calculateHeikinAshi = (data) => {
-  if (!data || data.length === 0) return [];
-  let prevHaOpen = data[0].open;
-  let prevHaClose = data[0].close;
-  return data.map((point, index) => {
-    const haClose = (point.open + point.high + point.low + point.close) / 4;
-    let haOpen = index === 0 ? (point.open + point.close) / 2 : (prevHaOpen + prevHaClose) / 2;
-    const haHigh = Math.max(point.high, haOpen, haClose);
-    const haLow = Math.min(point.low, haOpen, haClose);
-    prevHaOpen = haOpen;
-    prevHaClose = haClose;
-    return { ...point, haOpen, haHigh, haLow, haClose, haCandleRange: [haLow, haHigh] };
-  });
-};
-
 const calculateSMA = (data, period) => {
-  if (!data || data.length === 0) return [];
   return data.map((point, index, arr) => {
     if (index < period - 1) return { ...point, sma: null };
-    const sum = arr.slice(index - period + 1, index + 1).reduce((acc, val) => acc + (val.price || 0), 0);
+    let sum = 0;
+    for(let i = index - period + 1; i <= index; i++) sum += arr[i].price;
     return { ...point, sma: sum / period };
   });
 };
 
-const calculateEMA = (data, period) => {
-  if (!data || data.length === 0) return [];
-  const k = 2 / (period + 1);
-  let ema = data[0]?.price || 0;
-  return data.map((point, index) => {
-    if (index === 0) return { ...point, ema: null };
-    ema = (point.price || 0) * k + ema * (1 - k);
-    return { ...point, ema };
-  });
-};
-
-const calculateMACD = (data) => {
-  if (!data || data.length === 0) return [];
-  const calcGenericEMA = (arr, period, key) => {
-    const k = 2 / (period + 1);
-    let ema = arr[0]?.[key] || 0;
-    return arr.map((point, index) => {
-      if (index === 0) return ema;
-      ema = (point[key] || 0) * k + ema * (1 - k);
-      return ema;
-    });
-  };
-  const ema12 = calcGenericEMA(data, 12, 'price');
-  const ema26 = calcGenericEMA(data, 26, 'price');
-  const withMacdLine = data.map((point, i) => ({ ...point, macdLine: ema12[i] - ema26[i] }));
-  const signalLine = calcGenericEMA(withMacdLine, 9, 'macdLine');
-  return withMacdLine.map((point, i) => {
-    const hist = point.macdLine - signalLine[i];
-    return { ...point, macdSignal: signalLine[i], macdHistPos: hist >= 0 ? hist : 0, macdHistNeg: hist < 0 ? hist : 0 };
-  });
-};
-
-const calculateBollingerBands = (data, period = 20, multiplier = 2) => {
-  if (!data || data.length === 0) return [];
-  return data.map((point, index, arr) => {
-    if (index < period - 1) return { ...point, bbUpper: null, bbLower: null };
-    const slice = arr.slice(index - period + 1, index + 1);
-    const sum = slice.reduce((acc, val) => acc + (val.price || 0), 0);
-    const sma = sum / period;
-    const variance = slice.reduce((acc, val) => acc + Math.pow((val.price || 0) - sma, 2), 0) / period;
-    const stdDev = Math.sqrt(variance);
-    return { ...point, bbUpper: sma + stdDev * multiplier, bbLower: sma - stdDev * multiplier };
-  });
-};
-
-const calculateRSI = (data, period = 14) => {
-  if (!data || data.length === 0) return [];
-  let avgGain = 0, avgLoss = 0;
-  return data.map((point, index, arr) => {
-    if (index === 0) return { ...point, rsi: null };
-    const diff = (point.price || 0) - (arr[index - 1].price || 0);
-    const gain = Math.max(0, diff), loss = Math.max(0, -diff);
-    if (index < period) {
-      avgGain += gain; avgLoss += loss; return { ...point, rsi: null };
-    } else if (index === period) {
-      avgGain /= period; avgLoss /= period;
-    } else {
-      avgGain = (avgGain * (period - 1) + gain) / period;
-      avgLoss = (avgLoss * (period - 1) + loss) / period;
-    }
-    const rs = avgGain / (avgLoss === 0 ? 1 : avgLoss);
-    return { ...point, rsi: 100 - (100 / (1 + rs)) };
-  });
-};
-
 const calculateVWAP = (data) => {
-  if (!data || data.length === 0) return [];
-  let cumVol = 0, cumVolPrice = 0;
-  return data.map(point => {
-    const typPrice = point.candleRange ? (point.candleRange[0] + point.candleRange[1] + (point.close || point.price)) / 3 : point.price;
+  let cumulativeTPV = 0;
+  let cumulativeVolume = 0;
+  return data.map((point) => {
+    const typicalPrice = (point.high + point.low + point.close) / 3;
     const vol = point.volume || 0;
-    cumVol += vol;
-    cumVolPrice += typPrice * vol;
-    return { ...point, vwap: cumVol === 0 ? null : cumVolPrice / cumVol };
+    cumulativeTPV += typicalPrice * vol;
+    cumulativeVolume += vol;
+    return {
+      ...point,
+      vwap: cumulativeVolume === 0 ? point.price : cumulativeTPV / cumulativeVolume
+    };
   });
 };
 
 const calculateAutoSR = (data) => {
-  if (!data || data.length < 15) return [];
-  let pivots = [];
-  for (let i = 5; i < data.length - 5; i++) {
-    const slice = data.slice(i - 5, i + 6);
-    const high = data[i].high !== undefined ? data[i].high : data[i].price;
-    const low = data[i].low !== undefined ? data[i].low : data[i].price;
-    const isHigh = slice.every(d => (d.high !== undefined ? d.high : d.price) <= high);
-    const isLow = slice.every(d => (d.low !== undefined ? d.low : d.price) >= low);
-    if (isHigh) pivots.push({ type: 'resistance', price: high, weight: 1 });
-    if (isLow) pivots.push({ type: 'support', price: low, weight: 1 });
+  if (!data || data.length < 20) return { support: null, resistance: null };
+  let highs = [];
+  let lows = [];
+  for(let i = 2; i < data.length - 2; i++) {
+    if (data[i].high > data[i-1].high && data[i].high > data[i-2].high && data[i].high > data[i+1].high && data[i].high > data[i+2].high) {
+      highs.push(data[i].high);
+    }
+    if (data[i].low < data[i-1].low && data[i].low < data[i-2].low && data[i].low < data[i+1].low && data[i].low < data[i+2].low) {
+      lows.push(data[i].low);
+    }
   }
-  let grouped = [];
-  pivots.forEach(p => {
-    const existing = grouped.find(g => Math.abs(g.price - p.price) / p.price < 0.005); 
-    if (existing) existing.weight += 1;
-    else grouped.push({ ...p });
-  });
-  return grouped.sort((a,b) => b.weight - a.weight).slice(0, 5);
+  const currentPrice = data[data.length - 1].price;
+  const supports = lows.filter(l => l < currentPrice).sort((a,b) => b - a);
+  const resistances = highs.filter(h => h > currentPrice).sort((a,b) => a - b);
+  
+  return {
+    support: supports.length > 0 ? supports[0] : null,
+    resistance: resistances.length > 0 ? resistances[0] : null
+  };
 };
 
 const TIMEFRAMES = {
-  'LIVE': { label: 'Live', interval: '1m', limit: 100 },
-  '1M': { label: '1M', interval: '4h', limit: 180 },
-  '6M': { label: '6M', interval: '1d', limit: 180 },
-  '1Y': { label: '1Y', interval: '1d', limit: 365 },
-  '5Y': { label: '5Y', interval: '1w', limit: 260 },
+  '1m': { label: '1m', interval: '1m', limit: 150 },
+  '5m': { label: '5m', interval: '5m', limit: 150 },
+  '15m': { label: '15m', interval: '15m', limit: 150 },
+  '1H': { label: '1H', interval: '1h', limit: 150 }
 };
 
 const COIN_CONFIG = {
-  'BTCUSDT': { label: 'BTC', name: 'Bitcoin', color: '#F7931A' },
-  'ETHUSDT': { label: 'ETH', name: 'Ethereum', color: '#627EEA' },
-  'SOLUSDT': { label: 'SOL', name: 'Solana', color: '#14F195' }
+  'BTCUSDT': { label: 'BTC', name: 'Bitcoin' },
+  'ETHUSDT': { label: 'ETH', name: 'Ethereum' },
+  'SOLUSDT': { label: 'SOL', name: 'Solana' }
 };
 
 const formatTime = (timestamp, tf) => {
-  if (!timestamp) return '';
   const date = new Date(timestamp);
-  if (tf === 'LIVE') return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  if (tf === '1M') return date.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit' });
-  if (tf === '5Y') return date.toLocaleDateString([], { year: 'numeric', month: 'short' });
-  return date.toLocaleDateString([], { year: '2-digit', month: 'short', day: 'numeric' });
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
 
-const ToggleSwitch = ({ checked, onChange, colorClass }) => (
-  <label className="flex items-center cursor-pointer">
-    <div className="relative">
-      <input type="checkbox" checked={checked} onChange={onChange} className="sr-only" />
-      <div className={`w-8 h-4 rounded-full transition-colors duration-300 ease-in-out ${checked ? colorClass : 'bg-[#2A2E39]'}`}></div>
-      <div className={`absolute left-0.5 top-0.5 bg-white w-3 h-3 rounded-full transition-transform duration-300 ease-in-out ${checked ? 'transform translate-x-4' : ''}`}></div>
-    </div>
-  </label>
-);
-
-const IndicatorRow = ({ label, checked, onChange, colorClass, isPro }) => (
-  <div className="flex items-center justify-between py-1.5 hover:bg-[#2A2E39]/30 px-2 rounded -mx-2 transition-colors">
-    <div className="flex items-center gap-3">
-      <ToggleSwitch checked={checked} onChange={onChange} colorClass={colorClass} />
-      <span className={`text-[13px] font-medium ${checked ? 'text-[#D1D4DC]' : 'text-[#787B86]'}`}>
-        {label} {isPro && <span className={checked ? colorClass.replace('bg-', 'text-') : 'text-[#787B86]'}>(Pro)</span>}
-      </span>
-    </div>
-  </div>
-);
-
-function LiveCryptoDashboard() {
+export default function OrderFlowDashboard() {
   const [selectedPair, setSelectedPair] = useState('BTCUSDT');
-  const [selectedTimeframe, setSelectedTimeframe] = useState('LIVE');
-  const [chartType, setChartType] = useState('candle');
+  const [selectedTimeframe, setSelectedTimeframe] = useState('5m');
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [wsStatus, setWsStatus] = useState('connecting'); 
-  const [fngData, setFngData] = useState(null);
-  const [newsData, setNewsData] = useState([]);
-  const [bottomTab, setBottomTab] = useState('bot'); 
   
-  const [recentTrades, setRecentTrades] = useState([]);
-  const [orderBook, setOrderBook] = useState({ bids: [], asks: [], maxVol: 0 });
-  const [tickers, setTickers] = useState({});
-
-  // Indicators State
-  const [showSMA, setShowSMA] = useState(true);
-  const [showEMA, setShowEMA] = useState(false);
-  const [showFib, setShowFib] = useState(false);
-  const [showBollinger, setShowBollinger] = useState(false);
-  const [showVPVR, setShowVPVR] = useState(false);
-  const [showVolume, setShowVolume] = useState(true);
-  const [showRSI, setShowRSI] = useState(false);
-  const [showMACD, setShowMACD] = useState(false);
-  const [showAutoSR, setShowAutoSR] = useState(false);
-  const [showVWAP, setShowVWAP] = useState(false);
+  const [wsStatus, setWsStatus] = useState('connecting');
+  const [activeEndpoint, setActiveEndpoint] = useState('');
   
-  const smaPeriod = 14;
-  const emaPeriod = 9;
-
-  // Paper Trading State
-  const [portfolio, setPortfolio] = useState(() => {
-    const saved = localStorage.getItem('crypto_paper_portfolio');
-    return saved ? JSON.parse(saved) : { USDT: 10000, BTC: 0, ETH: 0, SOL: 0 };
+  const [orderFlowMetrics, setOrderFlowMetrics] = useState({
+    delta: 0, cvd: 0, buyVol: 0, sellVol: 0, bidVol: 0, askVol: 0
   });
-  
-  const [tradeHistory, setTradeHistory] = useState(() => {
-    const saved = localStorage.getItem('crypto_paper_history');
-    return saved ? JSON.parse(saved) : [];
+
+  // NEW: Options Data State
+  const [optionsData, setOptionsData] = useState({
+    pcr: 0, callOi: 0, putOi: 0, maxPain: null, bias: 'Neutral'
   });
-  
-  const [isBotActive, setIsBotActive] = useState(false);
-  const lastBotTradeRef = useRef(0);
 
-  // Sync Paper Trading to Local Storage
-  useEffect(() => {
-    localStorage.setItem('crypto_paper_portfolio', JSON.stringify(portfolio));
-  }, [portfolio]);
+  const [showIndicators, setShowIndicators] = useState({
+    vpvr: true, sma: true, vwap: true, sr: true, maxPain: true
+  });
 
-  useEffect(() => {
-    localStorage.setItem('crypto_paper_history', JSON.stringify(tradeHistory));
-  }, [tradeHistory]);
-
-  const executeTrade = (action) => {
-    if (data.length === 0) return;
-    const currentPrice = data[data.length - 1].price;
-    const coin = selectedPair.replace('USDT', '');
-    const tradeSizeUSDT = Math.min(1000, portfolio.USDT); // Hardcode $1000 order size
-
-    if (action === 'BUY') {
-      if (portfolio.USDT < 10) return; // Insufficient funds
-      const qty = tradeSizeUSDT / currentPrice;
-      
-      setPortfolio(p => ({ ...p, USDT: p.USDT - tradeSizeUSDT, [coin]: (p[coin] || 0) + qty }));
-      setTradeHistory(h => [{ 
-        id: Date.now(), type: 'BUY', pair: selectedPair, price: currentPrice, qty, total: tradeSizeUSDT, time: Date.now(), bot: isBotActive 
-      }, ...h].slice(0, 50));
-      
-    } else if (action === 'SELL') {
-      if (!portfolio[coin] || portfolio[coin] <= 0) return; // Nothing to sell
-      const qty = portfolio[coin]; // Sell entire holding of this coin
-      const total = qty * currentPrice;
-      
-      setPortfolio(p => ({ ...p, USDT: p.USDT + total, [coin]: 0 }));
-      setTradeHistory(h => [{ 
-        id: Date.now(), type: 'SELL', pair: selectedPair, price: currentPrice, qty, total, time: Date.now(), bot: isBotActive 
-      }, ...h].slice(0, 50));
-    }
-  };
-
-  // Initial Fetches (Sentiment, News, Tickers)
+  // --- Deribit Options Flow Poller ---
   useEffect(() => {
     let isMounted = true;
-    fetch('https://api.alternative.me/fng/')
-      .then(res => res.json())
-      .then(json => { if (isMounted && json?.data?.length > 0) setFngData({ value: parseInt(json.data[0].value, 10), classification: json.data[0].value_classification }); })
-      .catch(() => {});
-      
-    const rssUrl = encodeURIComponent('https://cointelegraph.com/rss');
-    fetch(`https://api.rss2json.com/v1/api.json?rss_url=${rssUrl}`)
-      .then(res => res.json())
-      .then(json => {
-        if (isMounted && json?.items) {
-          setNewsData(json.items.slice(0, 8).map((item, i) => ({
-            id: item.guid || String(i), url: item.link, title: item.title, source: 'CoinTelegraph', time: Math.floor(new Date(item.pubDate).getTime() / 1000)
-          })));
-        }
-      })
-      .catch(() => {});
-      
-    return () => { isMounted = false; };
-  }, []);
-
-  useEffect(() => {
-    let isMounted = true;
-    const fetchTickers = async () => {
+    const fetchOptionsFlow = async () => {
       try {
-        const symbols = encodeURIComponent('["BTCUSDT","ETHUSDT","SOLUSDT"]');
-        const res = await fetchBinance(`/api/v3/ticker/24hr?symbols=${symbols}`);
-        const data = await res.json();
-        if (isMounted && Array.isArray(data)) {
-          const formatted = data.reduce((acc, curr) => {
-            acc[curr.symbol] = { price: parseFloat(curr.lastPrice), change: parseFloat(curr.priceChangePercent), high: parseFloat(curr.highPrice), low: parseFloat(curr.lowPrice), vol: parseFloat(curr.volume) };
-            return acc;
-          }, {});
-          setTickers(formatted);
-        }
-      } catch (err) {}
-    };
-    fetchTickers();
-    const interval = setInterval(fetchTickers, 5000);
-    return () => { isMounted = false; clearInterval(interval); };
-  }, []);
-
-  // DOM / Recent Trades Poller
-  useEffect(() => {
-    let isMounted = true;
-    let fallbackInterval = setInterval(async () => {
-      if (!isMounted) return;
-      try {
-        const depthRes = await fetchBinance(`/api/v3/depth?symbol=${selectedPair}&limit=15`);
-        const depthData = await depthRes.json();
-        if (depthData.bids && depthData.asks) {
-          const formatDepth = (arr) => arr.map(item => ({ price: parseFloat(item[0]), qty: parseFloat(item[1]) }));
-          const bids = formatDepth(depthData.bids);
-          const asks = formatDepth(depthData.asks).reverse();
-          let bidsTotal = 0; let asksTotal = 0;
-          const mappedBids = bids.map(b => { bidsTotal += b.qty; return { ...b, total: bidsTotal }; });
-          const mappedAsks = asks.map(a => { asksTotal += a.qty; return { ...a, total: asksTotal }; });
-          setOrderBook({ bids: mappedBids, asks: mappedAsks, maxVol: Math.max(bidsTotal, asksTotal) });
-        }
-        
-        const tradeRes = await fetchBinance(`/api/v3/trades?symbol=${selectedPair}&limit=20`);
-        const tradeData = await tradeRes.json();
-        if (Array.isArray(tradeData)) {
-          const formattedTrades = tradeData.reverse().map(t => ({
-            id: t.id, price: parseFloat(t.price), qty: parseFloat(t.qty), time: t.time, isSell: t.isBuyerMaker
-          }));
-          setRecentTrades(formattedTrades);
-        }
-      } catch (e) {}
-    }, 2000);
-    return () => { isMounted = false; clearInterval(fallbackInterval); };
-  }, [selectedPair]);
-
-  // Main Chart Data Poller
-  useEffect(() => {
-    let pollInterval = null;
-    let isMounted = true;
-    const tfConfig = TIMEFRAMES[selectedTimeframe];
-
-    const fetchHistoricalAndStartPolling = async () => {
-      try {
-        setLoading(true);
-        const res = await fetchBinance(`/api/v3/klines?symbol=${selectedPair}&interval=${tfConfig.interval}&limit=${tfConfig.limit}`);
+        const currency = selectedPair.replace('USDT', '');
+        const res = await fetch(`https://www.deribit.com/api/v2/public/get_book_summary_by_currency?currency=${currency}&kind=option`);
         const json = await res.json();
         
-        if (!isMounted) return;
-        
-        if (Array.isArray(json) && json.length > 0) {
-          const historicalData = json.map(d => ({
-            timestamp: d[0], time: formatTime(d[0], selectedTimeframe), open: parseFloat(d[1]) || 0, high: parseFloat(d[2]) || 0, low: parseFloat(d[3]) || 0, close: parseFloat(d[4]) || 0, price: parseFloat(d[4]) || 0, volume: parseFloat(d[5]) || 0, candleRange: [parseFloat(d[3]) || 0, parseFloat(d[2]) || 0]
-          }));
-          setData(historicalData);
-          setWsStatus('connected');
-        } else setData([]);
-        
-        setLoading(false);
+        if (!isMounted || !json.result) return;
 
-        pollInterval = setInterval(async () => {
-          try {
-            const priceRes = await fetchBinance(`/api/v3/klines?symbol=${selectedPair}&interval=${tfConfig.interval}&limit=1`);
-            const priceData = await priceRes.json();
-            
-            if (!isMounted || !Array.isArray(priceData) || priceData.length === 0) return;
-            
-            const latestKline = priceData[0];
-            const klineStartTime = latestKline[0];
-            
-            setData(prevData => {
-              if (!prevData || prevData.length === 0) return prevData;
-              const lastPoint = prevData[prevData.length - 1];
-              const newDataPoint = { timestamp: klineStartTime, time: formatTime(klineStartTime, selectedTimeframe), open: parseFloat(latestKline[1]) || 0, high: parseFloat(latestKline[2]) || 0, low: parseFloat(latestKline[3]) || 0, close: parseFloat(latestKline[4]) || 0, price: parseFloat(latestKline[4]) || 0, volume: parseFloat(latestKline[5]) || 0, candleRange: [parseFloat(latestKline[3]) || 0, parseFloat(latestKline[2]) || 0] };
-              if (klineStartTime > lastPoint.timestamp) return [...prevData.slice(1), newDataPoint];
-              else return [...prevData.slice(0, prevData.length - 1), newDataPoint];
-            });
-            setWsStatus('connected');
-          } catch (pollError) { 
-            if (isMounted) setWsStatus('error'); 
+        let callOi = 0;
+        let putOi = 0;
+        const strikeOi = {}; 
+
+        json.result.forEach(item => {
+          const nameParts = item.instrument_name.split('-');
+          if (nameParts.length === 4) {
+            const strike = parseFloat(nameParts[2]);
+            const type = nameParts[3]; 
+            const oi = item.open_interest || 0;
+
+            if (type === 'C') callOi += oi;
+            if (type === 'P') putOi += oi;
+
+            if (!strikeOi[strike]) strikeOi[strike] = 0;
+            strikeOi[strike] += oi;
           }
-        }, 3000); 
+        });
+
+        const pcr = callOi > 0 ? putOi / callOi : 0;
         
-      } catch (error) { 
-        if (isMounted) { setLoading(false); setData([]); setWsStatus('error'); } 
+        let maxPain = null;
+        let maxOi = 0;
+        for (let strike in strikeOi) {
+          if (strikeOi[strike] > maxOi) {
+            maxOi = strikeOi[strike];
+            maxPain = parseFloat(strike);
+          }
+        }
+
+        // Bullish if calls outnumber puts heavily (< 0.8)
+        // Bearish if puts outnumber calls heavily (> 1.2)
+        let bias = 'Neutral';
+        if (pcr < 0.85) bias = 'Bullish';
+        if (pcr > 1.15) bias = 'Bearish';
+
+        setOptionsData({ pcr, callOi, putOi, maxPain, bias });
+
+      } catch (e) {
+        console.warn("Deribit API blocked or unavailable.");
       }
     };
-    
-    fetchHistoricalAndStartPolling();
-    return () => { isMounted = false; if (pollInterval) clearInterval(pollInterval); };
+
+    fetchOptionsFlow();
+    const interval = setInterval(fetchOptionsFlow, 300000); // Update every 5 mins
+    return () => { isMounted = false; clearInterval(interval); };
+  }, [selectedPair]);
+
+  // --- Binance WebSockets / Fallback ---
+  useEffect(() => {
+    let isMounted = true;
+    let sockets = []; 
+    let fallbackInterval = null;
+    let workingRestBase = '';
+    let lastTradeId = 0;
+
+    setOrderFlowMetrics({ delta: 0, cvd: 0, buyVol: 0, sellVol: 0, bidVol: 0, askVol: 0 });
+
+    const REST_ENDPOINTS = [
+      'https://api.binance.info',       
+      'https://data-api.binance.vision',
+      'https://api.binance.com'        
+    ];
+
+    const WS_ENDPOINTS = [
+      'wss://stream.binance.info:9443',
+      'wss://data-stream.binance.vision',
+      'wss://stream.binance.com:9443'
+    ];
+
+    const fetchInitialData = async () => {
+      setLoading(true);
+      setWsStatus('connecting');
+      const tf = TIMEFRAMES[selectedTimeframe];
+      let successData = null;
+
+      for (let base of REST_ENDPOINTS) {
+        try {
+          const res = await fetch(`${base}/api/v3/klines?symbol=${selectedPair}&interval=${tf.interval}&limit=${tf.limit}`);
+          if (res.ok) {
+            successData = await res.json();
+            workingRestBase = base;
+            break; 
+          }
+        } catch (err) {}
+      }
+
+      if (!isMounted) return;
+
+      if (successData) {
+        const formatted = successData.map(d => ({
+          timestamp: d[0], time: formatTime(d[0], selectedTimeframe),
+          open: parseFloat(d[1]), high: parseFloat(d[2]), low: parseFloat(d[3]),
+          close: parseFloat(d[4]), price: parseFloat(d[4]), volume: parseFloat(d[5]),
+          candleRange: [parseFloat(d[3]), parseFloat(d[2])]
+        }));
+        setData(formatted);
+        setLoading(false);
+        startWebSockets(0);
+      } else {
+        setLoading(false);
+        setWsStatus('error');
+      }
+    };
+
+    const startRestPolling = (baseUrl) => {
+      if (!isMounted) return;
+      setWsStatus('polling');
+      setActiveEndpoint('REST Proxy');
+
+      fallbackInterval = setInterval(async () => {
+        if (!isMounted) return;
+        try {
+          const streamSymbol = selectedPair.toUpperCase();
+          const tf = TIMEFRAMES[selectedTimeframe];
+
+          const klineRes = await fetch(`${baseUrl}/api/v3/klines?symbol=${streamSymbol}&interval=${tf.interval}&limit=1`);
+          if (klineRes.ok) {
+            const klineData = await klineRes.json();
+            const k = klineData[0];
+            const currentPrice = parseFloat(k[4]);
+            
+            setData(prev => {
+              if (prev.length === 0) return prev;
+              const last = prev[prev.length - 1];
+              if (k[0] > last.timestamp) {
+                return [...prev.slice(1), {
+                  timestamp: k[0], time: formatTime(k[0], selectedTimeframe),
+                  open: parseFloat(k[1]), high: parseFloat(k[2]), low: parseFloat(k[3]),
+                  close: currentPrice, price: currentPrice, volume: parseFloat(k[5]),
+                  candleRange: [parseFloat(k[3]), parseFloat(k[2])]
+                }];
+              } else {
+                return [...prev.slice(0, -1), { 
+                  ...last, 
+                  close: currentPrice, price: currentPrice, 
+                  high: Math.max(last.high, parseFloat(k[2])), 
+                  low: Math.min(last.low, parseFloat(k[3])), 
+                  volume: parseFloat(k[5]), 
+                  candleRange: [Math.min(last.low, parseFloat(k[3])), Math.max(last.high, parseFloat(k[2]))] 
+                }];
+              }
+            });
+          }
+
+          const depthRes = await fetch(`${baseUrl}/api/v3/depth?symbol=${streamSymbol}&limit=20`);
+          if (depthRes.ok) {
+            const depthData = await depthRes.json();
+            let bVol = 0; let aVol = 0;
+            depthData.bids.forEach(b => bVol += parseFloat(b[1]));
+            depthData.asks.forEach(a => aVol += parseFloat(a[1]));
+            setOrderFlowMetrics(prev => ({ ...prev, bidVol: bVol, askVol: aVol }));
+          }
+
+          const tradesRes = await fetch(`${baseUrl}/api/v3/aggTrades?symbol=${streamSymbol}&limit=50`);
+          if (tradesRes.ok) {
+            const tradesData = await tradesRes.json();
+            let newBuyVol = 0; let newSellVol = 0; let newDelta = 0;
+
+            tradesData.forEach(msg => {
+              if (msg.a > lastTradeId) {
+                lastTradeId = msg.a;
+                const qty = parseFloat(msg.q);
+                const price = parseFloat(msg.p);
+                if (qty * price >= 5000) {
+                  const isBuy = !msg.m;
+                  newBuyVol += isBuy ? qty : 0;
+                  newSellVol += !isBuy ? qty : 0;
+                  newDelta += isBuy ? qty : -qty;
+                }
+              }
+            });
+
+            if (newBuyVol > 0 || newSellVol > 0) {
+              setOrderFlowMetrics(prev => ({
+                ...prev,
+                buyVol: prev.buyVol + newBuyVol,
+                sellVol: prev.sellVol + newSellVol,
+                delta: prev.delta + newDelta,
+                cvd: prev.cvd + newDelta
+              }));
+            }
+          }
+        } catch(e) {}
+      }, 3000);
+    };
+
+    const startWebSockets = (endpointIndex) => {
+      if (endpointIndex >= WS_ENDPOINTS.length) {
+        if (isMounted) {
+           if (workingRestBase) startRestPolling(workingRestBase);
+           else setWsStatus('error');
+        }
+        return;
+      }
+
+      const WS_BASE = WS_ENDPOINTS[endpointIndex];
+      if (isMounted) setActiveEndpoint(WS_BASE.replace('wss://', '').split(':')[0]);
+      
+      const streamSymbol = selectedPair.toLowerCase();
+      const tf = TIMEFRAMES[selectedTimeframe];
+
+      sockets.forEach(s => { s.onclose = null; s.onerror = null; s.close(); });
+      sockets = [];
+
+      try {
+        const klineWs = new WebSocket(`${WS_BASE}/ws/${streamSymbol}@kline_${tf.interval}`);
+        const tradeWs = new WebSocket(`${WS_BASE}/ws/${streamSymbol}@aggTrade`);
+        const depthWs = new WebSocket(`${WS_BASE}/ws/${streamSymbol}@depth20@100ms`);
+
+        sockets.push(klineWs, tradeWs, depthWs);
+        
+        let connectedCount = 0;
+        const onOpen = () => {
+          connectedCount++;
+          if (connectedCount === 3 && isMounted) setWsStatus('connected');
+        };
+
+        klineWs.onopen = onOpen; tradeWs.onopen = onOpen; depthWs.onopen = onOpen;
+
+        const onError = () => {
+           if (isMounted && wsStatus !== 'error') {
+               setWsStatus('retrying');
+               startWebSockets(endpointIndex + 1);
+           }
+        };
+
+        klineWs.onerror = onError; tradeWs.onerror = onError; depthWs.onerror = onError;
+        klineWs.onclose = onError;
+
+        klineWs.onmessage = (event) => {
+          if (!isMounted) return;
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.e !== 'kline') return;
+            const k = msg.k;
+            const currentPrice = parseFloat(k.c);
+            
+            setData(prev => {
+              if (prev.length === 0) return prev;
+              const last = prev[prev.length - 1];
+              if (k.t > last.timestamp) {
+                return [...prev.slice(1), {
+                  timestamp: k.t, time: formatTime(k.t, selectedTimeframe),
+                  open: parseFloat(k.o), high: parseFloat(k.h), low: parseFloat(k.l),
+                  close: currentPrice, price: currentPrice, volume: parseFloat(k.v),
+                  candleRange: [parseFloat(k.l), parseFloat(k.h)]
+                }];
+              } else {
+                return [...prev.slice(0, -1), { 
+                  ...last, 
+                  close: currentPrice, price: currentPrice, 
+                  high: Math.max(last.high, parseFloat(k.h)), 
+                  low: Math.min(last.low, parseFloat(k.l)), 
+                  volume: parseFloat(k.v), 
+                  candleRange: [Math.min(last.low, parseFloat(k.l)), Math.max(last.high, parseFloat(k.h))] 
+                }];
+              }
+            });
+          } catch(e) {}
+        };
+
+        tradeWs.onmessage = (event) => {
+          if (!isMounted) return;
+          try {
+            const msg = JSON.parse(event.data);
+            const qty = parseFloat(msg.q);
+            const isMaker = msg.m; 
+            
+            if (qty * parseFloat(msg.p) < 5000) return;
+
+            setOrderFlowMetrics(prev => {
+              const isBuy = !isMaker;
+              const currentDelta = isBuy ? qty : -qty;
+              return {
+                ...prev,
+                buyVol: prev.buyVol + (isBuy ? qty : 0),
+                sellVol: prev.sellVol + (!isBuy ? qty : 0),
+                delta: prev.delta + currentDelta,
+                cvd: prev.cvd + currentDelta
+              };
+            });
+          } catch(e) {}
+        };
+
+        depthWs.onmessage = (event) => {
+          if (!isMounted) return;
+          try {
+            const msg = JSON.parse(event.data);
+            let bVol = 0; let aVol = 0;
+            if (msg.bids) msg.bids.forEach(b => bVol += parseFloat(b[1]));
+            if (msg.asks) msg.asks.forEach(a => aVol += parseFloat(a[1]));
+            setOrderFlowMetrics(prev => ({ ...prev, bidVol: bVol, askVol: aVol }));
+          } catch(e) {}
+        };
+
+      } catch (err) {
+        startWebSockets(endpointIndex + 1);
+      }
+    };
+
+    fetchInitialData();
+
+    return () => {
+      isMounted = false;
+      if (fallbackInterval) clearInterval(fallbackInterval);
+      sockets.forEach(s => { s.onclose = null; s.onerror = null; s.close(); });
+    };
   }, [selectedPair, selectedTimeframe]);
 
-  const chartData = useMemo(() => {
-    if (!data || data.length === 0) return [];
-    let processed = calculateHeikinAshi(data);
-    processed = calculateSMA(processed, smaPeriod);
-    processed = calculateEMA(processed, emaPeriod);
-    processed = calculateBollingerBands(processed, 20);
-    processed = calculateRSI(processed, 14);
-    processed = calculateMACD(processed);
+  const { chartData, autoSR, yDomain, volDomain, vpvrData } = useMemo(() => {
+    if (data.length === 0) {
+      return { chartData: [], autoSR: {support: null, resistance: null}, yDomain: [0, 100], volDomain: [0, 100], vpvrData: [] };
+    }
+    
+    let processed = calculateSMA(data, 14);
     processed = calculateVWAP(processed);
-    return processed;
-  }, [data, smaPeriod, emaPeriod]);
+    const sr = calculateAutoSR(data);
+    
+    const prices = data.map(d => d.price).filter(isFinite);
+    const min = prices.length > 0 ? Math.min(...prices) : 0;
+    const max = prices.length > 0 ? Math.max(...prices) : 100;
+    const padding = (max - min) * 0.1;
+    const safeDomain = [Math.max(0, min - padding), max + padding];
 
-  // Strict Y-Axis Domain Lock (Forces absolute synchronization for VPVR)
-  const yDomain = useMemo(() => {
-    if (!chartData || chartData.length === 0) return [0, 100000]; 
-    const prices = chartData.flatMap(d => [d.low !== undefined ? d.low : d.price, d.high !== undefined ? d.high : d.price]);
-    const min = Math.min(...prices);
-    const max = Math.max(...prices);
-    if (min === max || !isFinite(min) || !isFinite(max)) return [0, 100000];
-    const padding = (max - min) * 0.05; 
-    return [min - padding, max + padding];
-  }, [chartData]);
+    const volumes = data.map(d => d.volume).filter(isFinite);
+    const maxVol = volumes.length > 0 ? Math.max(...volumes) : 100;
+    const safeVolDomain = [0, maxVol * 4]; 
 
-  const autoSRLevels = useMemo(() => {
-    if (!data || data.length === 0) return [];
-    return calculateAutoSR(data);
-  }, [data]);
-
-  // VPVR Array Generation (calculated unconditionally for the bot to read)
-  const vpvrData = useMemo(() => {
-    if (!chartData || chartData.length === 0 || yDomain[0] === 0) return [];
-    const binsCount = 60; 
-    const [minPrice, maxPrice] = yDomain;
-    const binSize = (maxPrice - minPrice) / binsCount;
-
+    const binsCount = 40;
+    const binSize = max > min ? (max - min) / binsCount : 1;
     const bins = Array.from({ length: binsCount }, (_, i) => ({
-      priceLevel: minPrice + (i * binSize) + (binSize / 2),
-      volume: 0,
-      upVolume: 0,
-      downVolume: 0
+      priceLevel: min + (i * binSize) + (binSize / 2),
+      vol: 0
     }));
 
-    chartData.forEach(d => {
-      const typPrice = d.candleRange ? (d.candleRange[0] + d.candleRange[1] + (d.close || d.price)) / 3 : d.price;
-      const vol = d.volume || 0;
-      let idx = Math.floor((typPrice - minPrice) / binSize);
-      if (idx >= binsCount) idx = binsCount - 1;
-      if (idx < 0) idx = 0;
-      
-      if(bins[idx]) {
-        bins[idx].volume += vol;
-        const isUp = (d.close || d.price) >= (d.open || d.price);
-        if (isUp) bins[idx].upVolume += vol;
-        else bins[idx].downVolume += vol;
-      }
-    });
+    if (showIndicators.vpvr && max > min) {
+      data.forEach(d => {
+        const typPrice = (d.low + d.high + d.close) / 3;
+        let idx = Math.floor((typPrice - min) / binSize);
+        idx = Math.max(0, Math.min(idx, binsCount - 1));
+        bins[idx].vol += (isFinite(d.volume) ? d.volume : 0);
+      });
+    }
 
-    return bins;
-  }, [chartData, yDomain]);
+    return { chartData: processed, autoSR: sr, yDomain: safeDomain, volDomain: safeVolDomain, vpvrData: bins };
+  }, [data, showIndicators.vpvr]);
 
-  const botAnalysis = useMemo(() => {
-    if (!chartData || chartData.length === 0) return { score: 0, signals: [] };
-    const latest = chartData[chartData.length - 1];
-    const currentPrice = latest.price;
+  const setupAnalysis = useMemo(() => {
+    if (chartData.length < 2) return null;
+    const currentPrice = chartData[chartData.length - 1].price;
+    const prevPrice = chartData[chartData.length - 2].price;
+    const sma = chartData[chartData.length - 1].sma;
+    const vwap = chartData[chartData.length - 1].vwap;
     
+    let isBullish = false;
+    if (sma && currentPrice > sma && currentPrice > vwap) { isBullish = true; }
+    else if (sma && currentPrice < sma && currentPrice < vwap) { isBullish = false; }
+
+    let locationStr = 'Mid-Range';
+    let atSupport = false; let atResistance = false;
+    const s = autoSR.support; const r = autoSR.resistance;
+    if (s && ((currentPrice - s) / s) < 0.005) { locationStr = `At Support`; atSupport = true; }
+    else if (r && ((r - currentPrice) / r) < 0.005) { locationStr = `At Resistance`; atResistance = true; }
+
+    const totalOrderBook = orderFlowMetrics.bidVol + orderFlowMetrics.askVol;
+    const bidPct = totalOrderBook > 0 ? (orderFlowMetrics.bidVol / totalOrderBook) * 100 : 50;
+    const bookStr = bidPct > 55 ? `Buy Wall Detected` : bidPct < 45 ? `Sell Wall Detected` : 'Balanced DOM';
+
+    let absorption = 'None';
+    const deltaMag = Math.abs(orderFlowMetrics.delta);
+    const priceChange = Math.abs((currentPrice - prevPrice) / prevPrice);
+    
+    if (deltaMag > 5 && priceChange < 0.001) { 
+      if (orderFlowMetrics.delta > 0) absorption = 'Seller Absorption';
+      if (orderFlowMetrics.delta < 0) absorption = 'Buyer Absorption';
+    }
+
     let score = 0;
-    let signals = [];
+    let setupType = 'WAITING FOR CONFIRMATION';
+    let setupColor = 'text-slate-400';
+    let bgPulse = '';
 
-    // 1. RSI (Momentum)
-    if (latest.rsi) {
-      if (latest.rsi < 40) { score += 1; signals.push('RSI < 40'); }
-      else if (latest.rsi > 60) { score -= 1; signals.push('RSI > 60'); }
-    }
-
-    // 2. VWAP (Trend)
-    if (latest.vwap) {
-      if (currentPrice > latest.vwap) { score += 1; signals.push('Price > VWAP'); }
-      else if (currentPrice < latest.vwap) { score -= 1; signals.push('Price < VWAP'); }
-    }
-
-    // 3. Auto S/R (Structure)
-    if (autoSRLevels && autoSRLevels.length > 0) {
-      const supports = autoSRLevels.filter(l => l.type === 'support').map(l => l.price);
-      const resistances = autoSRLevels.filter(l => l.type === 'resistance').map(l => l.price);
+    // NEW: Calculate the 6-Point Score System
+    if (isBullish || atSupport) {
+      if (isBullish) score++;
+      if (atSupport) score++;
+      if (orderFlowMetrics.cvd > 0) score++;
+      if (bidPct > 55) score++;
+      if (absorption.includes('Buyer')) score++;
+      if (optionsData.bias === 'Bullish') score++; // The 6th Confirmation Factor
       
-      const nearestSupport = supports.length ? Math.max(...supports.filter(s => s < currentPrice)) : null;
-      const nearestResistance = resistances.length ? Math.min(...resistances.filter(r => r > currentPrice)) : null;
+      if (score >= 5) { setupType = 'HIGH PROB LONG'; setupColor = 'text-emerald-500'; bgPulse = 'bg-emerald-500/10 border-emerald-500/50'; }
+      else if (score >= 3) { setupType = 'LONG SETTING UP'; setupColor = 'text-emerald-400'; }
+    } else {
+      if (!isBullish) score++;
+      if (atResistance) score++;
+      if (orderFlowMetrics.cvd < 0) score++;
+      if (bidPct < 45) score++;
+      if (absorption.includes('Seller')) score++;
+      if (optionsData.bias === 'Bearish') score++; // The 6th Confirmation Factor
 
-      if (nearestSupport && (currentPrice - nearestSupport) / nearestSupport < 0.005) { score += 1; signals.push('At Support'); }
-      if (nearestResistance && (nearestResistance - currentPrice) / nearestResistance < 0.005) { score -= 1; signals.push('At Resistance'); }
+      if (score >= 5) { setupType = 'HIGH PROB SHORT'; setupColor = 'text-rose-500'; bgPulse = 'bg-rose-500/10 border-rose-500/50'; }
+      else if (score >= 3) { setupType = 'SHORT SETTING UP'; setupColor = 'text-rose-400'; }
     }
 
-    // 4. VPVR (Volume Nodes)
-    if (vpvrData && vpvrData.length > 0) {
-      const pocBin = vpvrData.reduce((max, bin) => (bin.volume > (max?.volume || 0) ? bin : max), vpvrData[0]);
-      if (pocBin && pocBin.volume > 0) {
-         if (currentPrice >= pocBin.priceLevel && (currentPrice - pocBin.priceLevel)/pocBin.priceLevel < 0.005) { score += 1; signals.push('POC Support'); }
-         else if (currentPrice < pocBin.priceLevel && (pocBin.priceLevel - currentPrice)/pocBin.priceLevel < 0.005) { score -= 1; signals.push('POC Resistance'); }
-      }
-    }
+    return {
+      locationStr, bookStr, absorption,
+      deltaStr: orderFlowMetrics.delta > 0 ? `+${orderFlowMetrics.delta.toFixed(2)}` : orderFlowMetrics.delta.toFixed(2),
+      cvdStr: orderFlowMetrics.cvd > 0 ? `+${orderFlowMetrics.cvd.toFixed(2)}` : orderFlowMetrics.cvd.toFixed(2),
+      setupType, setupColor, bgPulse, score,
+      invalidation: setupType.includes('LONG') && s ? `< $${s.toFixed(2)}` : setupType.includes('SHORT') && r ? `> $${r.toFixed(2)}` : 'N/A'
+    };
 
-    return { score, signals };
-  }, [chartData, autoSRLevels, vpvrData]);
+  }, [chartData, autoSR, orderFlowMetrics, optionsData.bias]);
 
-  // Run the Confluence Auto-Bot
-  useEffect(() => {
-    if (!isBotActive || chartData.length === 0) return;
-    
-    const now = Date.now();
-    // 60 second cooldown to prevent bot spam on the same candle
-    if (now - lastBotTradeRef.current < 60000) return; 
-
-    if (botAnalysis.score >= 2) {
-      executeTrade('BUY');
-      lastBotTradeRef.current = now;
-    } else if (botAnalysis.score <= -2) {
-      executeTrade('SELL');
-      lastBotTradeRef.current = now;
-    }
-  }, [botAnalysis.score, isBotActive, portfolio, chartData.length]);
-
-
-  const fibLevels = useMemo(() => {
-    if (!showFib || !data || data.length === 0) return null;
-    const prices = data.map(d => d.price || 0);
-    if (prices.length === 0) return null;
-    const high = Math.max(...prices);
-    const low = Math.min(...prices);
-    const diff = high - low;
-    if (diff === 0 || !isFinite(diff)) return null;
-    return { 0: high, 0.236: high - diff * 0.236, 0.382: high - diff * 0.382, 0.5: high - diff * 0.5, 0.618: high - diff * 0.618, 1: low };
-  }, [data, showFib]);
-
-  const selectedTicker = tickers[selectedPair] || {};
   const currentPrice = chartData.length > 0 ? chartData[chartData.length - 1].price : 0;
-  
-  const totalPortfolioValue = useMemo(() => {
-    let total = portfolio.USDT;
-    Object.keys(COIN_CONFIG).forEach(pair => {
-      const coin = pair.replace('USDT', '');
-      if (portfolio[coin] && tickers[pair]) {
-        total += portfolio[coin] * tickers[pair].price;
-      }
-    });
-    return total;
-  }, [portfolio, tickers]);
+  const isUp = chartData.length > 1 ? currentPrice >= chartData[chartData.length - 2].price : true;
 
-  const pnlPercent = ((totalPortfolioValue - 10000) / 10000) * 100;
+  // Gauge calculations for the UI
+  const pcrPercentage = Math.min(Math.max((optionsData.pcr / 1.5) * 100, 0), 100);
 
   return (
-    <div className="h-screen w-screen bg-[#131722] text-[#D1D4DC] flex flex-col overflow-hidden font-sans selection:bg-[#2962FF]/30">
+    <div className="h-screen w-screen bg-slate-950 text-slate-200 flex flex-col font-sans overflow-hidden">
       
-      {/* TOP HEADER */}
-      <header className="h-14 border-b border-[#2A2E39] bg-[#1E222D] flex items-center justify-between px-4 shrink-0 z-20">
+      <header className="h-16 border-b border-slate-800 bg-slate-900 flex items-center justify-between px-4 sm:px-6 shrink-0 z-20 shadow-sm">
         <div className="flex items-center gap-3">
-          <div className="bg-[#2962FF] p-1.5 rounded text-white"><TrendingUp size={20} strokeWidth={2.5} /></div>
-          <span className="font-bold text-lg tracking-tight text-white hidden sm:block">Crypto<span className="text-[#2962FF]">Terminal</span></span>
+          <div className="bg-indigo-600 p-1.5 rounded-lg text-white shadow-lg"><Database size={22} /></div>
+          <span className="font-bold text-xl tracking-tight text-white hidden sm:block">V3 Flow<span className="text-indigo-400">Terminal</span></span>
         </div>
         
-        <div className="flex items-center gap-6 text-sm">
-          {Object.keys(COIN_CONFIG).map(pair => {
-            const t = tickers[pair];
-            if (!t) return null;
-            const isUp = t.change >= 0;
-            return (
-              <div key={pair} className="hidden md:flex items-center gap-2 cursor-pointer hover:bg-[#2A2E39] px-2 py-1 rounded transition-colors" onClick={() => setSelectedPair(pair)}>
-                <span className="font-bold" style={{color: selectedPair === pair ? TV_COLORS.blue : TV_COLORS.text}}>{COIN_CONFIG[pair].label}</span>
-                <span className="font-mono">{formatNumber(t.price, 2, pair==='BTCUSDT'?2:4)}</span>
-                <span className={isUp ? 'text-[#089981]' : 'text-[#F23645]'}>{isUp ? '▲' : '▼'}{Math.abs(t.change).toFixed(2)}%</span>
-              </div>
-            )
-          })}
+        <div className="flex items-center gap-4">
+          <div className="flex bg-slate-950 p-1 rounded-md border border-slate-800">
+             {Object.keys(COIN_CONFIG).map(c => (
+               <button key={c} onClick={() => setSelectedPair(c)} className={`px-3 py-1 rounded text-sm font-bold transition-all ${selectedPair === c ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-slate-300'}`}>
+                 {COIN_CONFIG[c].label}
+               </button>
+             ))}
+          </div>
+          <div className="flex bg-slate-950 p-1 rounded-md border border-slate-800 hidden md:flex">
+             {Object.keys(TIMEFRAMES).map(t => (
+               <button key={t} onClick={() => setSelectedTimeframe(t)} className={`px-3 py-1 rounded text-xs font-bold transition-all ${selectedTimeframe === t ? 'bg-slate-800 text-white shadow' : 'text-slate-500 hover:text-slate-300'}`}>
+                 {TIMEFRAMES[t].label}
+               </button>
+             ))}
+          </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          {wsStatus === 'connected' ? (
-             <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-[#089981]/10 text-[#089981] text-[11px] font-bold tracking-wide">
-               <div className="w-1.5 h-1.5 rounded-full bg-[#089981] animate-pulse"></div> LIVE
-             </span>
-          ) : wsStatus === 'connecting' ? (
-             <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-[#F7931A]/10 text-[#F7931A] text-[11px] font-bold tracking-wide">
-               <Loader2 size={12} className="animate-spin" /> BYPASSING ISP...
-             </span>
-          ) : (
-             <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-[#F23645]/10 text-[#F23645] text-[11px] font-bold tracking-wide">
-               ERROR
-             </span>
-          )}
+        <div className="flex flex-col items-end">
+           <div className={`text-2xl font-mono font-bold tracking-tighter ${isUp ? 'text-emerald-400' : 'text-rose-400'}`}>
+             ${currentPrice.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}
+           </div>
+           
+           <div className="text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5">
+              {wsStatus === 'connected' ? (
+                <><Wifi size={10} className="text-emerald-500"/> <span className="text-emerald-500/80">Secured: {activeEndpoint}</span></>
+              ) : wsStatus === 'retrying' ? (
+                <><RefreshCw size={10} className="text-amber-500 animate-spin"/> <span className="text-amber-500/80">Bypassing ISP...</span></>
+              ) : wsStatus === 'polling' ? (
+                <><Activity size={10} className="text-fuchsia-500 animate-pulse"/> <span className="text-fuchsia-500/80">REST Fallback Active</span></>
+              ) : wsStatus === 'connecting' ? (
+                <><Loader2 size={10} className="text-blue-500 animate-spin"/> <span className="text-blue-500/80">Connecting</span></>
+              ) : (
+                <><WifiOff size={10} className="text-rose-500"/> <span className="text-rose-500/80">Network Blocked</span></>
+              )}
+           </div>
         </div>
       </header>
 
-      <div className="flex-1 flex min-h-0">
+      <div className="flex-1 flex flex-col lg:flex-row min-h-0 bg-slate-950">
         
-        <div className="flex-1 flex flex-col min-w-0 bg-[#131722] border-r border-[#2A2E39]">
-          
-          {/* CHART CONTROLS */}
-          <div className="h-12 border-b border-[#2A2E39] flex items-center px-4 gap-4 shrink-0 overflow-x-auto [&::-webkit-scrollbar]:hidden">
-            <div className="flex bg-[#1E222D] rounded p-0.5">
-              {Object.keys(COIN_CONFIG).map(coinKey => (
-                <button key={coinKey} onClick={() => setSelectedPair(coinKey)} className={`px-3 py-1 rounded text-[13px] font-medium transition-colors ${selectedPair === coinKey ? 'bg-[#2A2E39] text-white' : 'text-[#787B86] hover:text-[#D1D4DC]'}`}>
-                  {COIN_CONFIG[coinKey].label}
-                </button>
-              ))}
-            </div>
-            <div className="w-px h-5 bg-[#2A2E39]"></div>
-            <div className="flex bg-[#1E222D] rounded p-0.5">
-              {Object.keys(TIMEFRAMES).map(tfKey => (
-                <button key={tfKey} onClick={() => setSelectedTimeframe(tfKey)} className={`px-2.5 py-1 rounded text-[13px] font-medium transition-colors ${selectedTimeframe === tfKey ? 'bg-[#2A2E39] text-[#2962FF]' : 'text-[#787B86] hover:text-[#D1D4DC]'}`}>
-                  {TIMEFRAMES[tfKey].label}
-                </button>
-              ))}
-            </div>
-            <div className="w-px h-5 bg-[#2A2E39]"></div>
-            <div className="flex bg-[#1E222D] rounded p-0.5">
-              <button onClick={() => setChartType('line')} className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[13px] font-medium transition-colors ${chartType === 'line' ? 'bg-[#2A2E39] text-white' : 'text-[#787B86] hover:text-[#D1D4DC]'}`}>Line</button>
-              <button onClick={() => setChartType('candle')} className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[13px] font-medium transition-colors ${chartType === 'candle' ? 'bg-[#2A2E39] text-white' : 'text-[#787B86] hover:text-[#D1D4DC]'}`}>Candles</button>
-              <button onClick={() => setChartType('heikinAshi')} className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[13px] font-medium transition-colors ${chartType === 'heikinAshi' ? 'bg-[#2A2E39] text-[#2962FF]' : 'text-[#787B86] hover:text-[#D1D4DC]'}`}>Heikin Ashi</button>
-            </div>
-          </div>
-
-          {/* MAIN CHART AREA */}
-          <div className="flex-1 flex flex-col relative min-h-0">
-            {loading ? (
-              <div className="absolute inset-0 flex flex-col items-center justify-center text-[#787B86] z-20">
-                <Loader2 className="w-10 h-10 animate-spin mb-4 text-[#2962FF]" />
-                <p>Establishing secure API connection...</p>
-              </div>
-            ) : (
-              <>
-                <div className="flex-1 w-full min-h-[250px] relative">
-                  
-                  {/* VPVR OVERLAY (Back Layer - Vercel Safe) */}
-                  {showVPVR && (
-                    <div className="absolute top-[15px] bottom-[30px] left-0 right-[75px] z-0 opacity-40 pointer-events-none flex justify-end">
-                      <div className="w-[35%] h-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart layout="vertical" data={vpvrData} margin={{ top: 0, right: 0, left: 0, bottom: 0 }} barCategoryGap={0}>
-                            <XAxis type="number" hide reversed={true} domain={[0, 'dataMax']} />
-                            <YAxis type="number" dataKey="priceLevel" domain={yDomain} hide />
-                            <Bar dataKey="downVolume" stackId="a" fill={TV_COLORS.red} isAnimationActive={false} />
-                            <Bar dataKey="upVolume" stackId="a" fill={TV_COLORS.blue} isAnimationActive={false} />
-                          </BarChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* CANDLESTICK OVERLAY (Front Layer) */}
-                  <div className="absolute inset-0 z-10">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <ComposedChart data={chartData} margin={{ top: 15, right: 0, left: 0, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#2A2E39" vertical={false} />
-                        
-                        <XAxis dataKey="time" height={30} stroke="#D1D4DC" tick={showRSI || showMACD ? false : { fill: '#D1D4DC', fontSize: 12, fontWeight: 500 }} tickMargin={10} minTickGap={30} axisLine={{ stroke: '#2A2E39' }} tickLine={false} />
-                        
-                        <YAxis yAxisId="price" domain={yDomain} allowDataOverflow={true} stroke="#D1D4DC" tick={{ fill: '#D1D4DC', fontSize: 12, fontWeight: 500, fontFamily: 'monospace' }} tickFormatter={(val) => val.toLocaleString()} width={75} orientation="right" axisLine={false} tickLine={false} />
-                        <YAxis yAxisId="volume" orientation="left" domain={[0, 'auto']} hide={true} />
-                        
-                        <Tooltip 
-                          cursor={{ stroke: '#2A2E39', strokeWidth: 1, strokeDasharray: '4 4' }}
-                          contentStyle={{ backgroundColor: '#1E222D', borderColor: '#2A2E39', color: '#D1D4DC', borderRadius: '4px', padding: '8px', fontSize: '13px' }}
-                          itemStyle={{ color: '#D1D4DC', padding: '2px 0' }} labelStyle={{ color: '#787B86', marginBottom: '4px', fontSize: '12px' }}
-                          formatter={(value, name, props) => {
-                            if (name === 'Volume') return [Number(value || 0).toLocaleString(), name];
-                            if (name === 'Candles' || name === 'candleRange') return [`O: ${formatNumber(props.payload.open)} H: ${formatNumber(props.payload.high)} L: ${formatNumber(props.payload.low)} C: ${formatNumber(props.payload.close)}`, 'OHLC'];
-                            if (name === 'Heikin Ashi' || name === 'haCandleRange') return [`O: ${formatNumber(props.payload.haOpen)} H: ${formatNumber(props.payload.haHigh)} L: ${formatNumber(props.payload.haLow)} C: ${formatNumber(props.payload.haClose)}`, 'Heikin Ashi'];
-                            if (name === 'RSI' || name === 'macdLine' || name === 'macdSignal' || name === 'macdHistPos' || name === 'macdHistNeg') return []; 
-                            return [formatNumber(value), name];
-                          }}
-                        />
-                        
-                        {showFib && fibLevels && Object.entries(fibLevels).map(([key, val]) => (
-                          <ReferenceLine key={key} yAxisId="price" y={val} stroke={TV_COLORS.blue} strokeDasharray="3 3" strokeOpacity={0.4} label={{ position: 'insideTopLeft', value: `${(Number(key)*100).toFixed(1)}%`, fill: TV_COLORS.blue, fontSize: 10 }} />
-                        ))}
-                        
-                        {showAutoSR && autoSRLevels.map((lvl, idx) => (
-                          <ReferenceLine key={`sr-${idx}`} yAxisId="price" y={lvl.price} stroke={lvl.type === 'support' ? TV_COLORS.green : TV_COLORS.red} strokeDasharray="3 3" strokeOpacity={0.6} label={{ position: lvl.type === 'support' ? 'insideBottomLeft' : 'insideTopLeft', value: `${lvl.type === 'support' ? 'Support' : 'Resistance'}`, fill: lvl.type === 'support' ? TV_COLORS.green : TV_COLORS.red, fontSize: 10 }} />
-                        ))}
-                        
-                        {showVolume && <Bar yAxisId="volume" dataKey="volume" fill={TV_COLORS.blue} opacity={0.3} name="Volume" isAnimationActive={false} />}
-                        
-                        {showBollinger && (
-                          <>
-                            <Line yAxisId="price" type="monotone" dataKey="bbUpper" stroke="#787B86" strokeDasharray="3 3" dot={false} strokeWidth={1} name="BB Upper" isAnimationActive={false} />
-                            <Line yAxisId="price" type="monotone" dataKey="bbLower" stroke="#787B86" strokeDasharray="3 3" dot={false} strokeWidth={1} name="BB Lower" isAnimationActive={false} />
-                          </>
-                        )}
-                        
-                        {showSMA && <Line yAxisId="price" type="monotone" dataKey="sma" stroke="#00BCD4" dot={false} strokeWidth={1.5} name={`SMA (${smaPeriod})`} isAnimationActive={false} />}
-                        {showEMA && <Line yAxisId="price" type="monotone" dataKey="ema" stroke="#9C27B0" dot={false} strokeWidth={1.5} name={`EMA (${emaPeriod})`} isAnimationActive={false} />}
-                        {showVWAP && <Line yAxisId="price" type="monotone" dataKey="vwap" stroke={TV_COLORS.red} strokeDasharray="5 5" dot={false} strokeWidth={1.5} name="VWAP" isAnimationActive={false} /> }
-                        
-                        {chartType === 'line' && <Line yAxisId="price" type="monotone" dataKey="price" stroke={TV_COLORS.blue} dot={false} strokeWidth={2} name="Price Action" isAnimationActive={false} />}
-                        {chartType === 'candle' && <Bar yAxisId="price" dataKey="candleRange" shape={(props) => <CustomCandlestick {...props} />} name="Candles" isAnimationActive={false} />}
-                        {chartType === 'heikinAshi' && <Bar yAxisId="price" dataKey="haCandleRange" shape={(props) => <CustomCandlestick {...props} isHeikinAshi={true} />} name="Heikin Ashi" isAnimationActive={false} />}
-                      </ComposedChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-
-                {/* Sub-panes (RSI, MACD) */}
-                {showRSI && (
-                  <div className="w-full h-32 shrink-0 border-t border-[#2A2E39] pt-2">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <ComposedChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#2A2E39" vertical={false} />
-                        <XAxis dataKey="time" stroke="#D1D4DC" tick={showMACD ? false : { fill: '#D1D4DC', fontSize: 12, fontWeight: 500 }} tickMargin={10} minTickGap={30} axisLine={false} tickLine={false} />
-                        <YAxis domain={[0, 100]} stroke="#D1D4DC" tick={{ fill: '#D1D4DC', fontSize: 12, fontWeight: 500, fontFamily: 'monospace' }} width={75} orientation="right" ticks={[30, 50, 70]} axisLine={false} tickLine={false} />
-                        <Tooltip contentStyle={{ backgroundColor: '#1E222D', borderColor: '#2A2E39' }} labelStyle={{ display: 'none' }} itemStyle={{ color: '#9C27B0', fontSize: '12px' }} formatter={(value) => [Number(value).toFixed(2), 'RSI']} />
-                        <ReferenceLine y={70} stroke={TV_COLORS.red} strokeDasharray="3 3" strokeOpacity={0.5} />
-                        <ReferenceLine y={30} stroke={TV_COLORS.green} strokeDasharray="3 3" strokeOpacity={0.5} />
-                        <Line type="monotone" dataKey="rsi" stroke="#9C27B0" dot={false} strokeWidth={1.5} isAnimationActive={false} />
-                      </ComposedChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-                
-                {showMACD && (
-                  <div className="w-full h-32 shrink-0 border-t border-[#2A2E39] pt-2">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <ComposedChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#2A2E39" vertical={false} />
-                        <XAxis dataKey="time" stroke="#D1D4DC" tick={{ fill: '#D1D4DC', fontSize: 12, fontWeight: 500 }} tickMargin={10} minTickGap={30} axisLine={false} tickLine={false} />
-                        <YAxis domain={['auto', 'auto']} stroke="#D1D4DC" tick={{ fill: '#D1D4DC', fontSize: 12, fontWeight: 500, fontFamily: 'monospace' }} width={75} orientation="right" axisLine={false} tickLine={false} />
-                        <Tooltip contentStyle={{ backgroundColor: '#1E222D', borderColor: '#2A2E39' }} labelStyle={{ display: 'none' }} formatter={(value, name) => [Number(value).toFixed(2), name.replace('macd', '')]} />
-                        <Bar dataKey="macdHistPos" stackId="a" fill={TV_COLORS.green} isAnimationActive={false} />
-                        <Bar dataKey="macdHistNeg" stackId="a" fill={TV_COLORS.red} isAnimationActive={false} />
-                        <Line type="monotone" dataKey="macdLine" stroke={TV_COLORS.blue} dot={false} strokeWidth={1.5} isAnimationActive={false} />
-                        <Line type="monotone" dataKey="macdSignal" stroke="#FF9800" dot={false} strokeWidth={1.5} isAnimationActive={false} />
-                      </ComposedChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-
-          <div className="h-64 border-t border-[#2A2E39] bg-[#1E222D] flex flex-col shrink-0">
-            <div className="flex items-center gap-4 px-4 pt-3 pb-2 border-b border-[#2A2E39]">
-              <button onClick={() => setBottomTab('bot')} className={`flex items-center gap-2 text-[13px] font-bold ${bottomTab === 'bot' ? 'text-[#2962FF]' : 'text-[#787B86] hover:text-[#D1D4DC]'}`}>
-                <Bot size={14} /> Paper Trading & Confluence Bot
-              </button>
-              <button onClick={() => setBottomTab('news')} className={`flex items-center gap-2 text-[13px] font-bold ${bottomTab === 'news' ? 'text-[#2962FF]' : 'text-[#787B86] hover:text-[#D1D4DC]'}`}>
-                <Newspaper size={14} /> Top Headlines
-              </button>
-            </div>
-            
-            <div className="flex-1 flex overflow-hidden">
-              {bottomTab === 'bot' ? (
-                <div className="flex-1 flex min-w-0">
-                  {/* Left: Portfolio Balance */}
-                  <div className="w-1/3 p-4 border-r border-[#2A2E39] flex flex-col justify-center">
-                    <div className="text-[11px] font-bold text-[#787B86] uppercase mb-1 flex items-center gap-1.5"><Wallet size={12}/> Est. Portfolio Value</div>
-                    <div className="text-2xl font-mono font-bold text-white mb-2">${totalPortfolioValue.toFixed(2)}</div>
-                    <div className={`text-[12px] font-bold mb-4 ${pnlPercent >= 0 ? 'text-[#089981]' : 'text-[#F23645]'}`}>
-                      {pnlPercent >= 0 ? '+' : ''}{pnlPercent.toFixed(2)}% All Time
-                    </div>
-                    
-                    <div className="space-y-1.5 font-mono text-[12px]">
-                      <div className="flex justify-between"><span className="text-[#787B86]">USDT (Cash)</span><span className="text-[#D1D4DC]">{portfolio.USDT.toFixed(2)}</span></div>
-                      {Object.keys(COIN_CONFIG).map(pair => {
-                        const coin = pair.replace('USDT', '');
-                        if (portfolio[coin] > 0) return <div key={coin} className="flex justify-between"><span className="text-[#787B86]">{coin}</span><span className="text-[#D1D4DC]">{portfolio[coin].toFixed(4)}</span></div>
-                        return null;
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Middle: Bot Controls & Signal Score */}
-                  <div className="w-1/3 p-4 border-r border-[#2A2E39] flex flex-col justify-center">
-                    <div className="bg-[#131722] border border-[#2A2E39] rounded p-3 mb-3">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-[13px] font-bold text-white flex items-center gap-2"><BrainCircuit size={14} className={isBotActive ? "text-[#089981]" : "text-[#787B86]"} /> Confluence Algo</span>
-                        <ToggleSwitch checked={isBotActive} onChange={(e) => setIsBotActive(e.target.checked)} colorClass="bg-[#089981]" />
-                      </div>
-                      <p className="text-[11px] text-[#787B86] leading-tight mb-2">Scores RSI, VWAP, S/R, and VPVR to find confluence. Triggers on +2 or -2.</p>
-                      
-                      <div className="flex items-center justify-between bg-[#1E222D] p-1.5 rounded border border-[#2A2E39]">
-                        <span className="text-[11px] font-bold text-[#D1D4DC] ml-1">Live Signal Score:</span>
-                        <span className={`text-[14px] font-mono font-bold px-2 rounded ${botAnalysis.score >= 2 ? 'bg-[#089981]/20 text-[#089981]' : botAnalysis.score <= -2 ? 'bg-[#F23645]/20 text-[#F23645]' : 'bg-[#2A2E39] text-[#D1D4DC]'}`}>
-                          {botAnalysis.score > 0 ? '+' : ''}{botAnalysis.score}
-                        </span>
-                      </div>
-                      {botAnalysis.signals.length > 0 && (
-                        <div className="mt-1.5 text-[10px] text-[#787B86] leading-tight truncate">
-                          Factors: {botAnalysis.signals.join(', ')}
-                        </div>
-                      )}
-                    </div>
-                    
-                    <div className="flex gap-3 mt-auto">
-                       <button onClick={() => executeTrade('BUY')} className="flex-1 py-2 bg-[#089981]/20 hover:bg-[#089981]/40 text-[#089981] font-bold rounded text-[12px] transition-colors shadow-sm">BUY $1000</button>
-                       <button onClick={() => executeTrade('SELL')} className="flex-1 py-2 bg-[#F23645]/20 hover:bg-[#F23645]/40 text-[#F23645] font-bold rounded text-[12px] transition-colors shadow-sm">SELL ALL</button>
-                    </div>
-                  </div>
-
-                  {/* Right: Transaction History */}
-                  <div className="w-1/3 p-4 flex flex-col">
-                    <div className="text-[11px] font-bold text-[#787B86] uppercase mb-2 flex items-center gap-1.5"><History size={12}/> Transaction Log</div>
-                    <div className="flex-1 overflow-y-auto [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-[#2A2E39] pr-2 space-y-1">
-                      {tradeHistory.length === 0 ? <div className="text-[11px] text-[#787B86]">No trades executed yet.</div> : 
-                        tradeHistory.map(trade => (
-                          <div key={trade.id} className="text-[11px] flex justify-between items-center py-1 border-b border-[#2A2E39]/50">
-                            <span className="text-[#787B86] font-mono">{new Date(trade.time).toLocaleTimeString()} {trade.bot && '🤖'}</span>
-                            <span className={`font-bold ${trade.type === 'BUY' ? 'text-[#089981]' : 'text-[#F23645]'}`}>{trade.type}</span>
-                            <span className="text-white">{trade.pair.replace('USDT','')}</span>
-                            <span className="text-[#787B86] font-mono">${formatNumber(trade.price)}</span>
-                          </div>
-                        ))
-                      }
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex-1 flex gap-4 p-3 overflow-x-auto [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-thumb]:bg-[#2A2E39] [&::-webkit-scrollbar-track]:bg-transparent">
-                  {newsData.length > 0 ? newsData.map(article => (
-                    <a key={article.id} href={article.url} target="_blank" rel="noopener noreferrer" className="w-72 shrink-0 bg-[#131722] border border-[#2A2E39] rounded p-3 hover:border-[#787B86] transition-colors flex flex-col justify-between">
-                      <div>
-                        <div className="text-[10px] text-[#2962FF] font-bold uppercase tracking-wider mb-1.5">{article.source}</div>
-                        <h4 className="text-[13px] text-[#D1D4DC] leading-snug line-clamp-2 hover:text-white transition-colors">{article.title}</h4>
-                      </div>
-                      <div className="text-[11px] text-[#787B86] flex items-center gap-1.5 mt-2">
-                        <Clock size={12} /> {new Date(article.time * 1000).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
-                      </div>
-                    </a>
-                  )) : (
-                    <div className="text-[12px] text-[#787B86] px-1">Waiting for news feed...</div>
-                  )}
+        {/* Left: Chart Area */}
+        <div className="flex-1 relative flex flex-col min-w-0 border-r border-slate-800">
+          {loading ? (
+             <div className="absolute inset-0 flex items-center justify-center flex-col text-slate-500 z-50 bg-slate-950/90">
+               <Loader2 className="w-10 h-10 animate-spin mb-4 text-indigo-500" />
+               <p className="font-mono text-sm tracking-widest uppercase">Routing through regional nodes...</p>
+             </div>
+          ) : (
+            <div className="flex-1 relative w-full h-full p-2">
+              
+              {/* Back Layer: VPVR Overlay */}
+              {showIndicators.vpvr && vpvrData.length > 0 && (
+                <div className="absolute top-[20px] bottom-[25px] right-[70px] left-0 opacity-20 pointer-events-none z-0">
+                   <div className="w-[30%] h-full ml-auto">
+                     <ResponsiveContainer width="100%" height="100%">
+                        <BarChart layout="vertical" data={vpvrData} margin={{top:0, right:0, left:0, bottom:0}}>
+                          <XAxis type="number" hide reversed domain={[0, 'dataMax']} />
+                          <YAxis type="number" dataKey="priceLevel" hide domain={yDomain} />
+                          <Bar dataKey="vol" fill="#3b82f6" isAnimationActive={false} />
+                        </BarChart>
+                     </ResponsiveContainer>
+                   </div>
                 </div>
               )}
+
+              {/* Front Layer: Primary Price Action */}
+              <div className="absolute inset-0 z-10 p-2">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={chartData} margin={{ top: 20, right: 0, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                    <XAxis dataKey="time" stroke="#64748b" tick={{fill:'#94a3b8', fontSize:11}} tickMargin={10} minTickGap={30} axisLine={false} tickLine={false} />
+                    <YAxis yAxisId="price" domain={yDomain} stroke="#64748b" tick={{fill:'#94a3b8', fontSize:12, fontFamily:'monospace'}} width={70} orientation="right" axisLine={false} tickLine={false} />
+                    <YAxis yAxisId="volume" hide domain={volDomain} />
+
+                    <Tooltip 
+                      cursor={{ stroke: '#334155', strokeWidth: 1, strokeDasharray: '4 4' }}
+                      contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#f8fafc', borderRadius: '4px' }}
+                      itemStyle={{ fontSize: '13px', fontWeight: 'bold' }}
+                      labelStyle={{ color: '#64748b', fontSize: '12px', marginBottom: '4px' }}
+                    />
+
+                    <Bar yAxisId="volume" dataKey="volume" fill="#475569" opacity={0.3} isAnimationActive={false} name="Vol" />
+                    
+                    {showIndicators.sr && autoSR.support && <ReferenceLine yAxisId="price" y={autoSR.support} stroke="#10b981" strokeDasharray="3 3" strokeOpacity={0.7} />}
+                    {showIndicators.sr && autoSR.resistance && <ReferenceLine yAxisId="price" y={autoSR.resistance} stroke="#f43f5e" strokeDasharray="3 3" strokeOpacity={0.7} />}
+
+                    {/* NEW: Options Max Pain Line */}
+                    {showIndicators.maxPain && optionsData.maxPain && (
+                      <ReferenceLine 
+                        yAxisId="price" 
+                        y={optionsData.maxPain} 
+                        stroke="#eab308" 
+                        strokeWidth={2} 
+                        strokeOpacity={0.8}
+                        label={{ position: 'insideTopLeft', value: 'GAMMA WALL (MAX PAIN)', fill: '#eab308', fontSize: 10, fontWeight: 'bold' }}
+                      />
+                    )}
+
+                    {showIndicators.sma && <Line yAxisId="price" type="monotone" dataKey="sma" stroke="#0ea5e9" dot={false} strokeWidth={1.5} isAnimationActive={false} name="SMA14"/>}
+                    {showIndicators.vwap && <Line yAxisId="price" type="monotone" dataKey="vwap" stroke="#d946ef" dot={false} strokeWidth={1.5} strokeDasharray="5 5" isAnimationActive={false} name="VWAP"/>}
+
+                    <Bar yAxisId="price" dataKey="candleRange" isAnimationActive={false} name="Candle" shape={<CustomCandlestick />} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
-        <aside className="w-80 lg:w-96 flex flex-col bg-[#1E222D] shrink-0 z-10 overflow-y-auto [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-thumb]:bg-[#2A2E39]">
+        {/* Right: Order Flow Engine Panel */}
+        <div className="w-full lg:w-[420px] bg-slate-900 flex flex-col shrink-0 overflow-y-auto">
           
-          <div className="p-4 border-b border-[#2A2E39]">
-            <div className="flex justify-between items-start mb-2">
-              <div className="flex items-center gap-2">
-                 <div className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white bg-[#2A2E39]">
-                   {COIN_CONFIG[selectedPair]?.name.charAt(0)}
-                 </div>
+          <div className="p-4 border-b border-slate-800 bg-slate-950 flex justify-between items-center">
+            <h2 className="text-sm font-bold text-white flex items-center gap-2 uppercase tracking-wide">
+              <Crosshair size={16} className="text-indigo-400"/> Order Flow Engine
+            </h2>
+            <div className="flex gap-2">
+              <button onClick={() => setShowIndicators(p=>({...p, vpvr: !p.vpvr}))} className={`px-2 py-1 text-[10px] font-bold rounded ${showIndicators.vpvr ? 'bg-blue-500/20 text-blue-400' : 'bg-slate-800 text-slate-500'}`}>VPVR</button>
+              <button onClick={() => setShowIndicators(p=>({...p, vwap: !p.vwap}))} className={`px-2 py-1 text-[10px] font-bold rounded ${showIndicators.vwap ? 'bg-fuchsia-500/20 text-fuchsia-400' : 'bg-slate-800 text-slate-500'}`}>VWAP</button>
+              <button onClick={() => setShowIndicators(p=>({...p, sr: !p.sr}))} className={`px-2 py-1 text-[10px] font-bold rounded ${showIndicators.sr ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-500'}`}>S/R</button>
+              <button onClick={() => setShowIndicators(p=>({...p, maxPain: !p.maxPain}))} className={`px-2 py-1 text-[10px] font-bold rounded ${showIndicators.maxPain ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-slate-500'}`}>MAX PAIN</button>
+            </div>
+          </div>
+
+          {setupAnalysis ? (
+            <div className={`m-4 p-5 rounded-xl border transition-all duration-500 ${setupAnalysis.bgPulse || 'bg-slate-950 border-slate-800'}`}>
+              <div className="flex justify-between items-start mb-4">
                  <div>
-                   <h2 className="text-lg font-bold text-white leading-tight">{COIN_CONFIG[selectedPair]?.name}</h2>
-                   <div className="text-[12px] text-[#787B86] leading-tight">{selectedPair}</div>
+                   <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">Status</div>
+                   <div className={`text-lg font-bold tracking-tight ${setupAnalysis.setupColor}`}>{setupAnalysis.setupType}</div>
+                 </div>
+                 <div className="flex flex-col items-end">
+                   <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">Conditions</div>
+                   <div className="text-lg font-mono font-bold text-white bg-slate-900 px-2 rounded border border-slate-700">{setupAnalysis.score} / 6</div>
+                 </div>
+              </div>
+
+              <div className="space-y-2 text-xs">
+                 <div className="flex justify-between p-2 bg-slate-900/50 rounded border border-slate-800/50">
+                   <span className="text-slate-400">Price Location:</span>
+                   <span className="font-bold text-slate-200">{setupAnalysis.locationStr}</span>
+                 </div>
+                 <div className="flex justify-between p-2 bg-slate-900/50 rounded border border-slate-800/50">
+                   <span className="text-slate-400">DOM Imbalance:</span>
+                   <span className="font-bold text-amber-400">{setupAnalysis.bookStr}</span>
+                 </div>
+                 <div className="flex justify-between p-2 bg-slate-900/50 rounded border border-slate-800/50">
+                   <span className="text-slate-400">Tape Absorption:</span>
+                   <span className={`font-bold ${setupAnalysis.absorption !== 'None' ? 'text-fuchsia-400' : 'text-slate-500'}`}>{setupAnalysis.absorption}</span>
+                 </div>
+                 <div className="flex justify-between p-2 bg-slate-900/50 rounded border border-slate-800/50">
+                   <span className="text-slate-400">Options Bias:</span>
+                   <span className={`font-bold ${optionsData.bias === 'Bullish' ? 'text-emerald-400' : optionsData.bias === 'Bearish' ? 'text-rose-400' : 'text-slate-300'}`}>{optionsData.bias}</span>
+                 </div>
+              </div>
+            </div>
+          ) : (
+            <div className="m-4 p-8 text-center text-slate-500 text-sm border border-slate-800 border-dashed rounded-xl flex items-center justify-center gap-2">
+              <Loader2 size={16} className="animate-spin"/> Parsing Setup...
+            </div>
+          )}
+
+          {/* NEW: Options Flow Widget */}
+          <div className="mx-4 p-4 bg-slate-950 border border-slate-800 rounded-xl flex flex-col gap-3">
+            <h3 className="text-xs font-bold uppercase text-slate-500 tracking-wider flex items-center gap-1.5"><PieChart size={14}/> Deribit Options Flow</h3>
+            
+            <div className="flex justify-between items-end">
+              <div>
+                 <div className="text-[10px] text-slate-400 uppercase font-bold mb-1">Put/Call Ratio (PCR)</div>
+                 <div className={`text-2xl font-mono font-bold ${optionsData.bias === 'Bullish' ? 'text-emerald-400' : optionsData.bias === 'Bearish' ? 'text-rose-400' : 'text-slate-300'}`}>
+                   {optionsData.pcr.toFixed(2)}
                  </div>
               </div>
               <div className="text-right">
-                 <div className="text-xl font-mono font-bold text-white leading-tight">{formatNumber(currentPrice, 2, 2)}</div>
-                 <div className={`text-[12px] font-bold ${selectedTicker.change >= 0 ? 'text-[#089981]' : 'text-[#F23645]'}`}>
-                   {selectedTicker.change >= 0 ? '+' : ''}{selectedTicker.change?.toFixed(2)}%
+                 <div className="text-[10px] text-slate-400 uppercase font-bold mb-1 flex items-center justify-end gap-1"><Magnet size={10}/> Max Pain Magnet</div>
+                 <div className="text-lg font-mono font-bold text-amber-400">
+                   {optionsData.maxPain ? `$${optionsData.maxPain.toLocaleString()}` : 'Calculating...'}
                  </div>
               </div>
             </div>
+
+            <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden mt-1 relative">
+               <div className="absolute top-0 left-0 h-full transition-all duration-1000 bg-gradient-to-r from-emerald-500 via-slate-500 to-rose-500" style={{width: '100%'}}></div>
+               <div className="absolute top-0 w-1 h-full bg-white shadow-[0_0_8px_white]" style={{left: `${pcrPercentage}%`, transition: 'left 1s ease'}}></div>
+            </div>
+            <div className="flex justify-between text-[9px] text-slate-500 font-bold uppercase mt-1">
+              <span>Extreme Greed (PCR &lt; 0.6)</span>
+              <span>Extreme Fear (PCR &gt; 1.2)</span>
+            </div>
           </div>
 
-          <div className="p-4 border-b border-[#2A2E39] flex flex-col h-72">
-             <h3 className="text-[13px] font-bold text-[#D1D4DC] flex items-center gap-2 mb-3">
-              <Layers size={14} className="text-[#787B86]" /> Order Book (DOM)
-             </h3>
-             <div className="flex-1 flex flex-col font-mono text-[11px] tabular-nums min-h-0">
-                <div className="grid grid-cols-3 text-[#787B86] pb-1.5 mb-1 border-b border-[#2A2E39]">
-                  <span className="text-left">Price</span>
-                  <span className="text-right">Size</span>
-                  <span className="text-right">Total</span>
-                </div>
-                <div className="flex flex-col-reverse justify-end flex-1 overflow-hidden">
-                  {orderBook.asks.slice(0, 7).map((ask, i) => (
-                    <div key={`ask-${i}`} className="grid grid-cols-3 relative py-[3px] z-10 hover:bg-[#2A2E39]/50 transition-colors">
-                      <div className="absolute top-0 right-0 h-full bg-[#F23645]/15 z-0" style={{ width: `${(ask.total / (orderBook.maxVol || 1)) * 100}%` }} />
-                      <span className="text-[#F23645] z-10 text-left pl-1">{formatNumber(ask.price, 2, 2)}</span>
-                      <span className="text-[#D1D4DC] z-10 text-right">{ask.qty.toFixed(3)}</span>
-                      <span className="text-[#D1D4DC] z-10 text-right pr-1">{ask.total.toFixed(3)}</span>
-                    </div>
-                  ))}
-                </div>
-                <div className="py-2 flex items-center justify-between text-[13px] font-bold bg-[#131722] px-2 rounded my-1 border border-[#2A2E39]">
-                  <span style={{color: selectedTicker.change >= 0 ? TV_COLORS.green : TV_COLORS.red}}>{formatNumber(selectedTicker.price, 2, 2)}</span>
-                  {selectedTicker.change >= 0 ? <TrendingUp size={14} color={TV_COLORS.green}/> : <TrendingDown size={14} color={TV_COLORS.red}/>}
-                </div>
-                <div className="flex flex-col flex-1 overflow-hidden">
-                  {orderBook.bids.slice(0, 7).map((bid, i) => (
-                    <div key={`bid-${i}`} className="grid grid-cols-3 relative py-[3px] z-10 hover:bg-[#2A2E39]/50 transition-colors">
-                      <div className="absolute top-0 right-0 h-full bg-[#089981]/15 z-0" style={{ width: `${(bid.total / (orderBook.maxVol || 1)) * 100}%` }} />
-                      <span className="text-[#089981] z-10 text-left pl-1">{formatNumber(bid.price, 2, 2)}</span>
-                      <span className="text-[#D1D4DC] z-10 text-right">{bid.qty.toFixed(3)}</span>
-                      <span className="text-[#D1D4DC] z-10 text-right pr-1">{bid.total.toFixed(3)}</span>
-                    </div>
-                  ))}
-                </div>
-             </div>
+          <div className="flex-1 mt-4 p-4 bg-slate-950 border-t border-slate-800 flex flex-col gap-4">
+            <h3 className="text-xs font-bold uppercase text-slate-500 tracking-wider">Whale CVD Tracker (&gt;$5k Hits)</h3>
+            
+            <div className="grid grid-cols-2 gap-3">
+               <div className="bg-slate-900 p-3 rounded-lg border border-slate-800 flex flex-col items-center justify-center">
+                 <span className="text-[10px] text-slate-400 uppercase font-bold mb-1">Session CVD</span>
+                 <span className={`text-xl font-mono font-bold ${orderFlowMetrics.cvd > 0 ? 'text-emerald-400' : orderFlowMetrics.cvd < 0 ? 'text-rose-400' : 'text-slate-300'}`}>
+                   {setupAnalysis?.cvdStr || '0.00'}
+                 </span>
+               </div>
+               <div className="bg-slate-900 p-3 rounded-lg border border-slate-800 flex flex-col items-center justify-center">
+                 <span className="text-[10px] text-slate-400 uppercase font-bold mb-1">Instant Delta</span>
+                 <span className={`text-xl font-mono font-bold ${orderFlowMetrics.delta > 0 ? 'text-emerald-400' : orderFlowMetrics.delta < 0 ? 'text-rose-400' : 'text-slate-300'}`}>
+                   {setupAnalysis?.deltaStr || '0.00'}
+                 </span>
+               </div>
+            </div>
+
+            <div className="mt-2 bg-slate-900 p-3 rounded-lg border border-slate-800">
+               <div className="flex justify-between text-xs mb-2 font-bold">
+                 <span className="text-emerald-400 flex items-center gap-1"><TrendingUp size={12}/> Market Buys</span>
+                 <span className="text-rose-400 flex items-center gap-1">Market Sells <TrendingDown size={12}/></span>
+               </div>
+               <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden flex">
+                 <div className="h-full bg-emerald-500 transition-all duration-300" style={{width: `${orderFlowMetrics.buyVol + orderFlowMetrics.sellVol > 0 ? (orderFlowMetrics.buyVol / (orderFlowMetrics.buyVol + orderFlowMetrics.sellVol))*100 : 50}%`}}></div>
+                 <div className="h-full bg-rose-500 transition-all duration-300" style={{flex: 1}}></div>
+               </div>
+            </div>
+            
+            <div className="text-[10px] text-slate-600 leading-tight mt-auto text-center px-4 pb-2">
+              Deribit Options feed active. Network bypass operational.
+            </div>
           </div>
 
-          <div className="p-4 border-b border-[#2A2E39] flex flex-col h-48 shrink-0">
-             <h3 className="text-[13px] font-bold text-[#D1D4DC] flex items-center gap-2 mb-3">
-              <List size={14} className="text-[#787B86]" /> Recent Trades
-             </h3>
-             <div className="flex-1 flex flex-col font-mono text-[11px] tabular-nums min-h-0 bg-[#131722] border border-[#2A2E39] rounded">
-                <div className="grid grid-cols-3 text-[#787B86] p-1.5 border-b border-[#2A2E39] bg-[#1E222D]">
-                  <span className="text-left">Price</span>
-                  <span className="text-right">Qty</span>
-                  <span className="text-right">Time</span>
-                </div>
-                <div className="flex-1 overflow-y-auto [&::-webkit-scrollbar]:hidden p-1">
-                  {recentTrades.map(trade => (
-                    <div key={trade.id} className="grid grid-cols-3 py-1 hover:bg-[#2A2E39]/30 px-1 rounded transition-colors">
-                      <span className={`text-left font-bold ${trade.isSell ? 'text-[#F23645]' : 'text-[#089981]'}`}>{formatNumber(trade.price, 2, 2)}</span>
-                      <span className="text-right text-[#D1D4DC]">{trade.qty.toFixed(4)}</span>
-                      <span className="text-right text-[#787B86]">{new Date(trade.time).toLocaleTimeString([], {hour12:false})}</span>
-                    </div>
-                  ))}
-                </div>
-             </div>
-          </div>
-
-          <div className="p-4 flex-1">
-             <h3 className="text-[13px] font-bold text-[#D1D4DC] flex items-center gap-2 mb-3">
-              <Settings size={14} className="text-[#787B86]" /> Chart Studies
-             </h3>
-             <div className="space-y-0.5 mb-4">
-                <IndicatorRow label="VPVR" isPro checked={showVPVR} onChange={(e) => setShowVPVR(e.target.checked)} colorClass="bg-[#2962FF]" />
-                <IndicatorRow label="VWAP" isPro checked={showVWAP} onChange={(e) => setShowVWAP(e.target.checked)} colorClass="bg-[#F23645]" />
-                <IndicatorRow label="Auto S/R" isPro checked={showAutoSR} onChange={(e) => setShowAutoSR(e.target.checked)} colorClass="bg-[#089981]" />
-                <div className="my-2 border-t border-[#2A2E39] mx-2"></div>
-                <IndicatorRow label="SMA (14)" checked={showSMA} onChange={(e) => setShowSMA(e.target.checked)} colorClass="bg-[#00BCD4]" />
-                <IndicatorRow label="EMA (9)" checked={showEMA} onChange={(e) => setShowEMA(e.target.checked)} colorClass="bg-[#9C27B0]" />
-                <IndicatorRow label="Bollinger Bands (20)" checked={showBollinger} onChange={(e) => setShowBollinger(e.target.checked)} colorClass="bg-[#D1D4DC]" />
-                <IndicatorRow label="Volume Overlay" checked={showVolume} onChange={(e) => setShowVolume(e.target.checked)} colorClass="bg-[#2962FF]" />
-                <div className="my-2 border-t border-[#2A2E39] mx-2"></div>
-                <IndicatorRow label="MACD (12,26,9) pane" checked={showMACD} onChange={(e) => setShowMACD(e.target.checked)} colorClass="bg-[#FF9800]" />
-                <IndicatorRow label="RSI (14) pane" checked={showRSI} onChange={(e) => setShowRSI(e.target.checked)} colorClass="bg-[#9C27B0]" />
-             </div>
-             
-             {fngData && (
-              <div className="mt-3 bg-[#131722] rounded p-2 flex items-center justify-between border border-[#2A2E39]">
-                <span className="text-[11px] font-bold text-[#787B86] uppercase">Sentiment</span>
-                <div className="flex items-center gap-2">
-                  <div className="text-[11px] font-bold" style={{color: fngData.value > 50 ? TV_COLORS.green : TV_COLORS.red}}>{fngData.classification} ({fngData.value})</div>
-                  <div className="w-16 h-1.5 bg-[#2A2E39] rounded-full overflow-hidden">
-                    <div className="h-full" style={{width: `${fngData.value}%`, backgroundColor: fngData.value > 50 ? TV_COLORS.green : TV_COLORS.red}}></div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-        </aside>
+        </div>
       </div>
     </div>
-  );
-}
-
-export default function App() {
-  return (
-    <ErrorBoundary>
-      <LiveCryptoDashboard />
-    </ErrorBoundary>
   );
 }

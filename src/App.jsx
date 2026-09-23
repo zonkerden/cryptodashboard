@@ -465,38 +465,43 @@ export default function OrderFlowDashboard() {
 
   const { chartData, autoSR, yDomain, volDomain, clampedMaxPain } = useMemo(() => {
     if (data.length === 0) {
-      return { chartData: [], autoSR: {support: null, resistance: null}, yDomain: [0, 100], volDomain: [0, 100], clampedMaxPain: null };
+      return { chartData: [], autoSR: {support: null, resistance: null}, yDomain: ['auto', 'auto'], volDomain: [0, 100], clampedMaxPain: null };
     }
     
     let processed = calculateSMA(data, 14);
     processed = calculateVWAP(processed);
     const sr = calculateAutoSR(data);
     
-    const prices = data.map(d => d.price).filter(isFinite);
-    const currentPrice = prices.length > 0 ? prices[prices.length - 1] : 0;
+    // 1. Calculate the natural High/Low of the visible candles
+    const lows = data.map(d => d.low).filter(isFinite);
+    const highs = data.map(d => d.high).filter(isFinite);
     
-    let min = prices.length > 0 ? Math.min(...prices) : 0;
-    let max = prices.length > 0 ? Math.max(...prices) : 100;
+    let min = lows.length > 0 ? Math.min(...lows) : 0;
+    let max = highs.length > 0 ? Math.max(...highs) : 100;
     
-    let displayMaxPain = null;
-
-    // Smart Clamping for Max Pain to prevent 1px squashed candles
-    if (showIndicators.maxPain && optionsData.maxPain) {
-      const maxDist = currentPrice * 0.05; // Cap zooming at 5% away from current price
-      displayMaxPain = optionsData.maxPain;
-      
-      if (displayMaxPain > currentPrice + maxDist) displayMaxPain = currentPrice + maxDist;
-      if (displayMaxPain < currentPrice - maxDist) displayMaxPain = currentPrice - maxDist;
-      
-      min = Math.min(min, displayMaxPain);
-      max = Math.max(max, displayMaxPain);
-    }
-    
+    // 2. Include Support and Resistance in the scale so they don't get cut off
     if (showIndicators.sr && sr.support) min = Math.min(min, sr.support);
     if (showIndicators.sr && sr.resistance) max = Math.max(max, sr.resistance);
 
-    const padding = (max - min) * 0.1;
-    const safeDomain = [Math.max(0, min - padding), max + padding];
+    // 3. Add a strict 15% padding to the top and bottom of the price action
+    const range = max - min;
+    const padding = range === 0 ? 100 : range * 0.15;
+    const domainMin = Math.max(0, min - padding);
+    const domainMax = max + padding;
+    const safeDomain = [domainMin, domainMax];
+    
+    // 4. Pin the Max Pain line to the edge WITHOUT changing the chart's zoom!
+    let displayMaxPain = null;
+
+    if (showIndicators.maxPain && optionsData.maxPain) {
+      displayMaxPain = optionsData.maxPain;
+      
+      // If it's higher than our top edge, pin it exactly to the top edge (slightly inside so the thickness shows)
+      if (displayMaxPain > domainMax) displayMaxPain = domainMax - (range * 0.01);
+      
+      // If it's lower than our bottom edge, pin it exactly to the bottom edge
+      if (displayMaxPain < domainMin) displayMaxPain = domainMin + (range * 0.01);
+    }
 
     const volumes = data.map(d => d.volume).filter(isFinite);
     const maxVol = volumes.length > 0 ? Math.max(...volumes) : 100;

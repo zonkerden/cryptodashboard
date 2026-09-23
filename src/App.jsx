@@ -1,652 +1,88 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { 
-  ResponsiveContainer, 
-  ComposedChart, 
-  Line,
-  Bar, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip, 
-  ReferenceLine,
-  Customized
-} from 'recharts';
-import { 
-  Activity, 
-  Wifi, 
-  WifiOff, 
-  Loader2, 
-  RefreshCw,
-  Play,
-  Square,
-  Crosshair,
-  Database
-} from 'lucide-react';
+import React,{useEffect,useMemo,useState}from'react';
+import{Wifi,WifiOff,RefreshCw,AlertTriangle}from'lucide-react';
 
-class ErrorBoundary extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-  static getDerivedStateFromError(error) {
-    return { hasError: true, error };
-  }
-  componentDidCatch(error, errorInfo) {
-    console.error("Dashboard caught an error:", error, errorInfo);
-  }
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div className="min-h-screen bg-slate-950 text-slate-200 p-10 flex flex-col items-center justify-center font-sans">
-          <div className="bg-rose-950/30 p-8 rounded-xl border border-rose-500/50 max-w-2xl w-full shadow-2xl">
-            <h1 className="text-2xl font-bold text-rose-400 mb-4 flex items-center gap-2">
-              <Activity /> Dashboard Crash Prevented
-            </h1>
-            <p className="text-slate-300 mb-4">An indicator encountered invalid data before it could load. Here is the exact error:</p>
-            <pre className="bg-slate-900 p-4 rounded text-sm text-rose-300 overflow-x-auto border border-slate-800 mb-6">
-              {this.state.error && this.state.error.toString()}
-            </pre>
-            <button 
-              onClick={() => window.location.reload()}
-              className="px-6 py-2.5 bg-rose-500 hover:bg-rose-600 text-white rounded font-bold transition-colors shadow-lg"
-            >
-              Reload Dashboard
-            </button>
-          </div>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
+const CFG={
+ BTCUSDT:{t:'BTC',name:'Bitcoin',trigger:87500,d:0},
+ ETHUSDT:{t:'ETH',name:'Ethereum',trigger:2800,d:2},
+ SOLUSDT:{t:'SOL',name:'Solana',trigger:120,d:2}
+};
+const SYMS=Object.keys(CFG);
+const blank=()=>({price:0,prev:0,buy:0,sell:0,bid:0,ask:0,imb:0,spread:0,k1:null,p1:null,k4:null,p4:null,oi:null,oi0:null,oiPct:null,funding:null});
+const initial=Object.fromEntries(SYMS.map(s=>[s,blank()]));
+const money=(v,d=0)=>Number.isFinite(v)?'$'+v.toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d}):'—';
+const compact=v=>Number.isFinite(v)?new Intl.NumberFormat('en',{notation:'compact',maximumFractionDigits:2}).format(v):'—';
+const pc=(v,d=1)=>Number.isFinite(v)?(v>=0?'+':'')+v.toFixed(d)+'%':'—';
+async function json(u){const r=await fetch(u,{cache:'no-store'});if(!r.ok)throw Error(r.status);return r.json()}
+const candle=d=>({o:+d[1],h:+d[2],l:+d[3],c:+d[4],v:+d[5]});
+
+function signal(sym,s){
+ const c=CFG[sym];
+ if(!s.price||!s.p1||!s.p4)return{label:'LOADING',tone:'neutral',score:0,reasons:['Waiting for live market data']};
+ const breakout=s.p1.c>c.trigger;
+ const deltaBull=s.buy>s.sell*1.08,deltaBear=s.sell>s.buy*1.08;
+ const bookBull=s.imb>.08,bookBear=s.imb<-.08;
+ const oiBull=s.oiPct!=null&&s.oiPct>.15,oiBear=s.oiPct!=null&&s.oiPct<-.15;
+ const oneBear=s.k1&&s.k1.l<s.p1.l&&s.price<s.p1.c;
+ const fourBear=s.price<s.p4.l;
+ if(breakout){
+  let score=4,reasons=['1H candle closed above '+money(c.trigger,c.d)];
+  if(deltaBull){score+=2;reasons.push('Aggressive buy flow / rolling CVD positive')}
+  if(bookBull){score+=2;reasons.push('Top-20 depth favors bids')}
+  if(oiBull){score+=1;reasons.push('Open interest building')}
+  if(s.price>=c.trigger){score+=1;reasons.push('Breakout level still holding')}
+  if(deltaBear||bookBear)return{label:'FALSE-BREAKOUT RISK',tone:'warn',score,reasons:[...reasons,'Order flow contradicts the breakout']};
+  return score>=7?{label:'CONFIRMED BREAKOUT',tone:'bull',score,reasons}:{label:'WEAK / UNCONFIRMED',tone:'warn',score,reasons:[...reasons,'Needs stronger order-flow confirmation']};
+ }
+ if((oneBear||fourBear)&&(deltaBear||bookBear||oiBear)){
+  const r=[];
+  if(oneBear)r.push('1H structure made a lower low');
+  if(fourBear)r.push('Price is below prior 4H low');
+  if(deltaBear)r.push('Aggressive sell flow dominates');
+  if(bookBear)r.push('Top-20 depth favors asks');
+  if(oiBear)r.push('Open interest falling / deleveraging');
+  return{label:'BEARISH STRUCTURE',tone:'bear',score:Math.min(10,5+r.length),reasons:r};
+ }
+ if(s.price>c.trigger*.995)return{label:'AT TRIGGER',tone:'warn',score:3,reasons:['Testing breakout level',deltaBull?'Order flow supportive':'Order flow not decisive']};
+ return{label:'WAIT',tone:'neutral',score:1,reasons:['No confirmed breakout or bearish structure change']};
 }
 
-const CustomCandlestick = (props) => {
-  const { x, y, width, height, payload } = props;
-  if (!payload || typeof payload.open !== 'number') return null;
-
-  const o = payload.open;
-  const c = payload.close;
-  const h = payload.high;
-  const l = payload.low;
-
-  const isUp = c >= o;
-  const color = isUp ? '#10b981' : '#ef4444'; 
-  const range = h - l;
-  
-  if (range === 0 || !isFinite(range)) {
-    return <line x1={x} y1={y} x2={x + width} y2={y} stroke={color} strokeWidth={2} />;
-  }
-
-  const ratio = height / range;
-  const openY = y + (h - o) * ratio;
-  const closeY = y + (h - c) * ratio;
-
-  const topY = Math.min(openY, closeY);
-  const bottomY = Math.max(openY, closeY);
-  const bodyHeight = Math.max(bottomY - topY, 2); 
-
-  return (
-    <g>
-      <line x1={x + width / 2} y1={y} x2={x + width / 2} y2={y + height} stroke={color} strokeWidth={1} />
-      <rect x={x + width * 0.2} y={topY} width={width * 0.6} height={bodyHeight} fill={color} stroke={color} />
-    </g>
-  );
-};
-
-const calculateVWAP = (data) => {
-  if (!data || data.length === 0) return [];
-  let cumulativeTypVolume = 0;
-  let cumulativeVolume = 0;
-  
-  return data.map((point) => {
-    const typPrice = (point.high + point.low + point.close) / 3;
-    const vol = point.volume || 0;
-    cumulativeTypVolume += typPrice * vol;
-    cumulativeVolume += vol;
-    
-    return {
-      ...point,
-      vwap: cumulativeVolume === 0 ? point.close : (cumulativeTypVolume / cumulativeVolume)
-    };
-  });
-};
-
-const TIMEFRAMES = {
-  '1m': { interval: '1m', limit: 100 },
-  '5m': { interval: '5m', limit: 120 },
-  '15m': { interval: '15m', limit: 100 },
-  '1H': { interval: '1h', limit: 100 }
-};
-
-export default function App() {
-  return (
-    <ErrorBoundary>
-      <V3FlowTerminal />
-    </ErrorBoundary>
-  );
-}
-
-function V3FlowTerminal() {
-  const [selectedPair, setSelectedPair] = useState('BTCUSDT');
-  const [selectedTimeframe, setSelectedTimeframe] = useState('5m');
-  const [data, setData] = useState([]);
-  const [recentTrades, setRecentTrades] = useState([]);
-  const [wsStatus, setWsStatus] = useState('connecting');
-  
-  // Toggles matching the screenshot
-  const [toggles, setToggles] = useState({
-    vpvr: true,
-    vwap: true,
-    sr: true,
-    maxPain: true
-  });
-
-  // Options & CVD Data
-  const [optionsData, setOptionsData] = useState({ pcr: 0.58, maxPain: 95000 });
-  const [cvdData, setCvdData] = useState({ sessionCvd: 0, instantDelta: 0, buyVol: 0, sellVol: 0 });
-
-  // Bot State (Persisted to LocalStorage)
-  const [botState, setBotState] = useState(() => {
-    const saved = localStorage.getItem('v3_bot_state');
-    if (saved) return JSON.parse(saved);
-    return { active: false, balance: 10000, position: null, history: [] };
-  });
-
-  useEffect(() => {
-    localStorage.setItem('v3_bot_state', JSON.stringify(botState));
-  }, [botState]);
-
-  useEffect(() => {
-    let isMounted = true;
-    let ws = null;
-    let tradeBuffer = [];
-    let currentBuyVol = 0;
-    let currentSellVol = 0;
-
-    const tfConfig = TIMEFRAMES[selectedTimeframe];
-
-    const fetchHistorical = async () => {
-      try {
-        const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${selectedPair}&interval=${tfConfig.interval}&limit=${tfConfig.limit}`);
-        const json = await res.json();
-        if (!isMounted) return;
-
-        const formatted = json.map(d => ({
-          timestamp: d[0],
-          time: new Date(d[0]).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          open: parseFloat(d[1]),
-          high: parseFloat(d[2]),
-          low: parseFloat(d[3]),
-          close: parseFloat(d[4]),
-          volume: parseFloat(d[5]),
-          candleRange: [parseFloat(d[3]), parseFloat(d[2])]
-        }));
-        
-        setData(formatted);
-        setWsStatus('connected');
-      } catch (err) {
-        setWsStatus('error');
-      }
-    };
-
-    fetchHistorical();
-
-    // WebSocket for Live Trades & Delta
-    try {
-      ws = new WebSocket(`wss://stream.binance.com:9443/ws/${selectedPair.toLowerCase()}@trade`);
-      
-      ws.onmessage = (event) => {
-        if (!isMounted) return;
-        const trade = JSON.parse(event.data);
-        const price = parseFloat(trade.p);
-        const qty = parseFloat(trade.q);
-        const isSell = trade.m;
-
-        // Update current candle live
-        setData(prev => {
-          if (prev.length === 0) return prev;
-          const newArr = [...prev];
-          const lastIdx = newArr.length - 1;
-          const lastCandle = { ...newArr[lastIdx] };
-          
-          lastCandle.close = price;
-          if (price > lastCandle.high) lastCandle.high = price;
-          if (price < lastCandle.low) lastCandle.low = price;
-          lastCandle.volume += qty;
-          lastCandle.candleRange = [lastCandle.low, lastCandle.high];
-          
-          newArr[lastIdx] = lastCandle;
-          return newArr;
-        });
-
-        // Track Whale CVD (>$5,000 threshold roughly for BTC)
-        const dollarValue = price * qty;
-        if (dollarValue > 5000) {
-          if (isSell) currentSellVol += qty;
-          else currentBuyVol += qty;
-
-          setCvdData(prev => ({
-            sessionCvd: prev.sessionCvd + (isSell ? -qty : qty),
-            instantDelta: (currentBuyVol - currentSellVol),
-            buyVol: currentBuyVol,
-            sellVol: currentSellVol
-          }));
-        }
-      };
-    } catch (e) {
-      setWsStatus('error');
-    }
-
-    // Options Mock Fetcher (Deribit API often blocks browser CORS, so we simulate realistic market maker movement)
-    const optionsInterval = setInterval(() => {
-      setOptionsData(prev => ({
-        pcr: Math.max(0.4, Math.min(1.5, prev.pcr + (Math.random() * 0.1 - 0.05))),
-        maxPain: prev.maxPain // Keeping static for testing visual magnet
-      }));
-    }, 10000);
-
-    return () => {
-      isMounted = false;
-      if (ws) ws.close();
-      clearInterval(optionsInterval);
-    };
-  }, [selectedPair, selectedTimeframe]);
-
-  const chartData = useMemo(() => {
-    let processed = [...data];
-    processed = calculateVWAP(processed);
-    return processed;
-  }, [data]);
-
-  const currentPrice = chartData.length > 0 ? chartData[chartData.length - 1].close : 0;
-  
-  // Calculate Auto S/R Lines based on 20-period lookback
-  const autoLevels = useMemo(() => {
-    if (chartData.length < 20) return { res: null, sup: null };
-    const recent = chartData.slice(-20);
-    const highs = recent.map(d => d.high);
-    const lows = recent.map(d => d.low);
-    return {
-      res: Math.max(...highs),
-      sup: Math.min(...lows)
-    };
-  }, [chartData]);
-
-  const setupEngine = useMemo(() => {
-    let score = 0;
-    let type = 'NONE';
-    let conditions = { loc: 'Waiting', dom: 'Neutral', tape: 'None', options: 'Neutral' };
-
-    if (!autoLevels.sup || !currentPrice) return { score, type, conditions };
-
-    const distToSup = Math.abs(currentPrice - autoLevels.sup) / currentPrice;
-    const distToRes = Math.abs(currentPrice - autoLevels.res) / currentPrice;
-
-    // 1. Location
-    if (distToSup < 0.002) { score += 2; type = 'LONG'; conditions.loc = 'At Support'; }
-    else if (distToRes < 0.002) { score += 2; type = 'SHORT'; conditions.loc = 'At Resistance'; }
-
-    // 2. DOM & Tape Absorption (Simulated based on delta + price stall)
-    if (type === 'LONG' && cvdData.instantDelta < -5) {
-      score += 2; 
-      conditions.dom = 'Buy Wall Detected';
-      conditions.tape = 'Buyer Absorption';
-    } else if (type === 'SHORT' && cvdData.instantDelta > 5) {
-      score += 2;
-      conditions.dom = 'Sell Wall Detected';
-      conditions.tape = 'Seller Absorption';
-    }
-
-    // 3. Options Macro Bias
-    if (optionsData.pcr < 0.7) {
-      if (type === 'LONG') score += 2;
-      conditions.options = 'Bullish';
-    } else if (optionsData.pcr > 1.0) {
-      if (type === 'SHORT') score += 2;
-      conditions.options = 'Bearish';
-    }
-
-    return { score, type, conditions };
-  }, [currentPrice, autoLevels, cvdData, optionsData]);
-
-  useEffect(() => {
-    if (!botState.active || !currentPrice) return;
-
-    // Entry Logic
-    if (!botState.position && setupEngine.score >= 5) {
-      const isLong = setupEngine.type === 'LONG';
-      const riskAmount = botState.balance * 0.01; // 1% risk
-      const stopLoss = isLong ? currentPrice * 0.99 : currentPrice * 1.01;
-      const takeProfit = isLong ? currentPrice * 1.03 : currentPrice * 0.97;
-      
-      const priceDiff = Math.abs(currentPrice - stopLoss);
-      const qty = riskAmount / priceDiff;
-
-      setBotState(prev => ({
-        ...prev,
-        position: { type: setupEngine.type, entry: currentPrice, sl: stopLoss, tp: takeProfit, qty }
-      }));
-    }
-
-    // Exit Logic (Stop Loss or Take Profit)
-    if (botState.position) {
-      const pos = botState.position;
-      let exitPrice = null;
-      let pnl = 0;
-
-      if (pos.type === 'LONG') {
-        if (currentPrice <= pos.sl) { exitPrice = pos.sl; pnl = (exitPrice - pos.entry) * pos.qty; }
-        else if (currentPrice >= pos.tp) { exitPrice = pos.tp; pnl = (exitPrice - pos.entry) * pos.qty; }
-      } else {
-        if (currentPrice >= pos.sl) { exitPrice = pos.sl; pnl = (pos.entry - exitPrice) * pos.qty; }
-        else if (currentPrice <= pos.tp) { exitPrice = pos.tp; pnl = (pos.entry - exitPrice) * pos.qty; }
-      }
-
-      if (exitPrice !== null) {
-        setBotState(prev => ({
-          ...prev,
-          balance: prev.balance + pnl,
-          position: null,
-          history: [{ type: pos.type, pnl, time: new Date().toLocaleTimeString() }, ...prev.history].slice(0, 10)
-        }));
-      }
-    }
-  }, [currentPrice, setupEngine, botState.active]);
-
-  const renderVPVR = (props) => {
-    if (!toggles.vpvr || !chartData || chartData.length === 0) return null;
-    const { yAxisMap, offset } = props;
-    if (!yAxisMap || !yAxisMap.price || !offset) return null;
-
-    const yScale = yAxisMap.price.scale;
-    let minPrice = Math.min(...chartData.map(d => d.low));
-    let maxPrice = Math.max(...chartData.map(d => d.high));
-    if (minPrice === maxPrice) return null;
-
-    const binsCount = 40;
-    const binSize = (maxPrice - minPrice) / binsCount;
-    const bins = Array.from({ length: binsCount }, (_, i) => ({
-      top: minPrice + ((i + 1) * binSize),
-      bottom: minPrice + (i * binSize),
-      upVol: 0,
-      downVol: 0
-    }));
-
-    chartData.forEach(d => {
-      let idx = Math.floor((d.close - minPrice) / binSize);
-      if (idx >= binsCount) idx = binsCount - 1;
-      if (idx < 0) idx = 0;
-      if (d.close >= d.open) bins[idx].upVol += d.volume;
-      else bins[idx].downVol += d.volume;
-    });
-
-    const maxVol = Math.max(...bins.map(b => b.upVol + b.downVol));
-    if (maxVol === 0) return null;
-
-    const maxWidth = offset.width * 0.35; // 35% of screen
-    const startX = offset.left + offset.width;
-
-    return (
-      <g className="vpvr-layer">
-        {bins.map((bin, i) => {
-          const y1 = yScale(bin.top);
-          const y2 = yScale(bin.bottom);
-          const topY = Math.min(y1, y2);
-          // +1 height ensures bars overlap and never vanish from anti-aliasing
-          const h = Math.max(Math.abs(y1 - y2), 1) + 1; 
-          
-          const totalVol = bin.upVol + bin.downVol;
-          if (totalVol === 0) return null;
-          
-          const totalWidth = (totalVol / maxVol) * maxWidth;
-          const upW = (bin.upVol / totalVol) * totalWidth;
-          const downW = (bin.downVol / totalVol) * totalWidth;
-
-          return (
-            <g key={`vpvr-${i}`}>
-              <rect x={startX - totalWidth} y={topY} width={downW} height={h} fill="#ef4444" fillOpacity={0.7} />
-              <rect x={startX - totalWidth + downW} y={topY} width={upW} height={h} fill="#10b981" fillOpacity={0.7} />
-            </g>
-          );
-        })}
-      </g>
-    );
+export default function App(){
+ const[m,setM]=useState(initial),[sel,setSel]=useState('BTCUSDT'),[live,setLive]=useState(false),[refreshed,setRefreshed]=useState(null);
+ async function slow(){
+  await Promise.all(SYMS.map(async sym=>{try{
+   const[k1,k4,oi,f]=await Promise.all([
+    json('https://api.binance.com/api/v3/klines?symbol='+sym+'&interval=1h&limit=4'),
+    json('https://api.binance.com/api/v3/klines?symbol='+sym+'&interval=4h&limit=4'),
+    json('https://fapi.binance.com/fapi/v1/openInterest?symbol='+sym),
+    json('https://fapi.binance.com/fapi/v1/premiumIndex?symbol='+sym)
+   ]);
+   setM(p=>{const old=p[sym],now=+oi.openInterest,start=old.oi0??now;return{...p,[sym]:{...old,k1:candle(k1.at(-1)),p1:candle(k1.at(-2)),k4:candle(k4.at(-1)),p4:candle(k4.at(-2)),oi:now,oi0:start,oiPct:start?(now-start)/start*100:0,funding:+f.lastFundingRate}}})
+  }catch(e){console.error(sym,e)}}));
+  setRefreshed(Date.now())
+ }
+ useEffect(()=>{slow();const id=setInterval(slow,30000);return()=>clearInterval(id)},[]);
+ useEffect(()=>{
+  const streams=SYMS.flatMap(s=>{const x=s.toLowerCase();return[x+'@aggTrade',x+'@depth20@100ms']}).join('/');
+  const ws=new WebSocket('wss://stream.binance.com:9443/stream?streams='+streams);
+  ws.onopen=()=>setLive(true);ws.onclose=()=>setLive(false);ws.onerror=()=>setLive(false);
+  ws.onmessage=e=>{const z=JSON.parse(e.data),st=z.stream||'',sym=SYMS.find(s=>st.startsWith(s.toLowerCase()));if(!sym)return;const d=z.data;
+   if(st.includes('@aggTrade')){const price=+d.p,usd=price*(+d.q),sell=d.m===true;setM(p=>{const o=p[sym],buy=o.buy*.997+(sell?0:usd),sv=o.sell*.997+(sell?usd:0);return{...p,[sym]:{...o,prev:o.price||price,price,buy,sell:sv}}})}
+   else{const bids=d.bids||d.b||[],asks=d.asks||d.a||[],bid=bids.reduce((a,x)=>a+(+x[0])*(+x[1]),0),ask=asks.reduce((a,x)=>a+(+x[0])*(+x[1]),0),bb=bids[0]?+bids[0][0]:0,aa=asks[0]?+asks[0][0]:0,mid=(bb+aa)/2||1;setM(p=>({...p,[sym]:{...p[sym],bid,ask,imb:(bid-ask)/(bid+ask||1),spread:aa&&bb?(aa-bb)/mid*10000:0}}))}
   };
-
-  const toggleBtnClass = (isActive) => 
-    `px-3 py-1 rounded text-xs font-bold transition-colors ${isActive ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`;
-
-  // Check if Max Pain is way off screen for the header warning
-  const isMaxPainOffScreen = autoLevels.res && (optionsData.maxPain > autoLevels.res * 1.05 || optionsData.maxPain < autoLevels.sup * 0.95);
-
-  return (
-    <div className="min-h-screen bg-[#0b1120] text-slate-200 p-4 font-sans selection:bg-indigo-500/30">
-      
-      {/* Header Panel */}
-      <div className="flex flex-col md:flex-row justify-between items-center mb-4 bg-[#111827] border border-slate-800 p-3 rounded-lg shadow-lg">
-        <div className="flex items-center gap-3 mb-4 md:mb-0">
-          <Database className="text-indigo-500" size={24} />
-          <h1 className="text-xl font-bold tracking-tight text-white">V3 Flow<span className="text-indigo-400">Terminal</span></h1>
-        </div>
-        
-        <div className="flex gap-4">
-          <div className="flex bg-slate-900 rounded p-1 border border-slate-800">
-            {['BTC', 'ETH', 'SOL'].map(coin => (
-              <button key={coin} onClick={() => setSelectedPair(`${coin}USDT`)} className={`px-4 py-1.5 rounded text-sm font-bold ${selectedPair.startsWith(coin) ? 'bg-slate-700 text-white' : 'text-slate-400'}`}>
-                {coin}
-              </button>
-            ))}
-          </div>
-          <div className="flex bg-slate-900 rounded p-1 border border-slate-800">
-            {Object.keys(TIMEFRAMES).map(tf => (
-              <button key={tf} onClick={() => setSelectedTimeframe(tf)} className={`px-3 py-1.5 rounded text-sm font-bold ${selectedTimeframe === tf ? 'bg-slate-700 text-white' : 'text-slate-400'}`}>
-                {tf}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="text-right flex flex-col items-end">
-          <div className={`text-2xl font-mono font-bold ${wsStatus === 'connected' ? 'text-emerald-400' : 'text-amber-400'}`}>
-            ${currentPrice > 0 ? currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '---'}
-          </div>
-          <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded">
-            <Wifi size={12} /> SECURED: STREAM.BINANCE.INFO
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-        
-        {/* Main Chart Area */}
-        <div className="lg:col-span-3 bg-[#111827] rounded-lg border border-slate-800 p-2 h-[800px] relative">
-          
-          {toggles.maxPain && isMaxPainOffScreen && (
-            <div className="absolute top-4 left-4 z-20 text-amber-500 font-bold text-xs bg-amber-500/10 px-2 py-1 rounded border border-amber-500/20">
-              GAMMA WALL (OFF-SCREEN: ${optionsData.maxPain.toLocaleString()})
-            </div>
-          )}
-
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={chartData} margin={{ top: 20, right: 60, left: 10, bottom: 20 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
-              <XAxis dataKey="time" stroke="#64748b" tick={{ fontSize: 11 }} tickMargin={10} minTickGap={30} axisLine={false} tickLine={false} />
-              
-              <YAxis 
-                yAxisId="price" 
-                domain={([dataMin, dataMax]) => {
-                  // This fixes the line stretching! 15% dynamic padding
-                  const range = dataMax - dataMin;
-                  const pad = range === 0 ? 100 : range * 0.15;
-                  return [dataMin - pad, dataMax + pad];
-                }}
-                allowDataOverflow={true} // Forces Recharts to obey our padding
-                orientation="right" 
-                stroke="#64748b" 
-                tick={{ fontSize: 11, fontWeight: 'bold' }} 
-                tickFormatter={v => v.toLocaleString()} 
-                axisLine={false} 
-                tickLine={false}
-              />
-
-              <Tooltip 
-                contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155', borderRadius: '8px', color: '#f8fafc' }}
-                itemStyle={{ fontWeight: 'bold' }}
-                cursor={{ stroke: '#475569', strokeWidth: 1, strokeDasharray: '4 4' }}
-              />
-
-              {/* Pro Indicators */}
-              <Customized component={renderVPVR} />
-              
-              {toggles.vwap && (
-                <Line yAxisId="price" type="monotone" dataKey="vwap" stroke="#a855f7" strokeDasharray="5 5" strokeWidth={2} dot={false} isAnimationActive={false} name="VWAP" />
-              )}
-
-              {toggles.maxPain && !isMaxPainOffScreen && (
-                <ReferenceLine yAxisId="price" y={optionsData.maxPain} ifOverflow="extendDomain" stroke="#f59e0b" strokeDasharray="4 4" strokeWidth={2} strokeOpacity={0.8} />
-              )}
-
-              {toggles.sr && autoLevels.res && (
-                <>
-                  <ReferenceLine yAxisId="price" y={autoLevels.res} ifOverflow="extendDomain" stroke="#ef4444" strokeDasharray="3 3" strokeWidth={2} strokeOpacity={0.5} />
-                  <ReferenceLine yAxisId="price" y={autoLevels.sup} ifOverflow="extendDomain" stroke="#10b981" strokeDasharray="3 3" strokeWidth={2} strokeOpacity={0.5} />
-                </>
-              )}
-
-              <Bar yAxisId="price" dataKey="candleRange" shape={(props) => <CustomCandlestick {...props} />} isAnimationActive={false} />
-            </ComposedChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Right Sidebar - Pro Terminal Modules */}
-        <div className="flex flex-col gap-4">
-          
-          {/* Order Flow Engine Controls */}
-          <div className="bg-[#111827] rounded-lg border border-slate-800 p-4">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-sm font-bold flex items-center gap-2 text-slate-300">
-                <Crosshair size={16} className="text-blue-500" /> ORDER FLOW ENGINE
-              </h2>
-              <div className="flex gap-1.5">
-                <button onClick={() => setToggles(p => ({...p, vpvr: !p.vpvr}))} className={toggleBtnClass(toggles.vpvr)}>VPVR</button>
-                <button onClick={() => setToggles(p => ({...p, vwap: !p.vwap}))} className={toggleBtnClass(toggles.vwap)}>VWAP</button>
-                <button onClick={() => setToggles(p => ({...p, sr: !p.sr}))} className={toggleBtnClass(toggles.sr)}>S/R</button>
-                <button onClick={() => setToggles(p => ({...p, maxPain: !p.maxPain}))} className={toggleBtnClass(toggles.maxPain)}>MAX PAIN</button>
-              </div>
-            </div>
-
-            {/* Score Card */}
-            <div className="bg-[#0f172a] rounded p-3 border border-slate-700/50 mb-3 flex justify-between items-center">
-              <div>
-                <div className="text-xs text-slate-500 font-bold mb-1">STATUS</div>
-                <div className={`text-lg font-black tracking-wide ${setupEngine.score >= 5 ? 'text-emerald-400 animate-pulse' : 'text-blue-400'}`}>
-                  {setupEngine.score >= 5 ? `${setupEngine.type} TRIGGERED` : setupEngine.score > 2 ? `${setupEngine.type} SETTING UP` : 'WAITING FOR SETUP'}
-                </div>
-              </div>
-              <div className="text-right">
-                <div className="text-xs text-slate-500 font-bold mb-1">CONDITIONS</div>
-                <div className="text-xl font-bold text-white">{setupEngine.score} / 6</div>
-              </div>
-            </div>
-
-            <div className="space-y-2 text-sm font-medium">
-              <div className="flex justify-between p-2 border-b border-slate-800/50"><span className="text-slate-500">Price Location:</span> <span className={setupEngine.conditions.loc !== 'Waiting' ? 'text-blue-400' : 'text-slate-300'}>{setupEngine.conditions.loc}</span></div>
-              <div className="flex justify-between p-2 border-b border-slate-800/50"><span className="text-slate-500">DOM Imbalance:</span> <span className={setupEngine.conditions.dom.includes('Wall') ? 'text-amber-400' : 'text-slate-300'}>{setupEngine.conditions.dom}</span></div>
-              <div className="flex justify-between p-2 border-b border-slate-800/50"><span className="text-slate-500">Tape Absorption:</span> <span className={setupEngine.conditions.tape !== 'None' ? 'text-fuchsia-400' : 'text-slate-300'}>{setupEngine.conditions.tape}</span></div>
-              <div className="flex justify-between p-2"><span className="text-slate-500">Options Bias:</span> <span className={setupEngine.conditions.options === 'Bullish' ? 'text-emerald-400' : setupEngine.conditions.options === 'Bearish' ? 'text-rose-400' : 'text-slate-300'}>{setupEngine.conditions.options}</span></div>
-            </div>
-          </div>
-
-          {/* Deribit Options Flow */}
-          <div className="bg-[#111827] rounded-lg border border-slate-800 p-4">
-            <h2 className="text-sm font-bold flex items-center gap-2 text-slate-300 mb-4">
-              <Activity size={16} className="text-indigo-400" /> DERIBIT OPTIONS FLOW
-            </h2>
-            <div className="flex justify-between items-end mb-2">
-              <div>
-                <div className="text-xs text-slate-500 font-bold mb-1">PUT/CALL RATIO (PCR)</div>
-                <div className={`text-2xl font-bold ${optionsData.pcr > 1 ? 'text-rose-400' : 'text-emerald-400'}`}>{optionsData.pcr.toFixed(2)}</div>
-              </div>
-              <div className="text-right">
-                <div className="text-xs text-slate-500 font-bold mb-1">MAX PAIN MAGNET</div>
-                <div className="text-xl font-bold text-amber-400">${optionsData.maxPain.toLocaleString()}</div>
-              </div>
-            </div>
-            
-            {/* Custom PCR Gauge */}
-            <div className="w-full h-1.5 bg-slate-800 rounded-full mt-4 relative">
-              <div className="absolute top-[-4px] w-2 h-3 bg-white rounded-sm shadow" style={{ left: `${Math.min(100, Math.max(0, (optionsData.pcr / 1.5) * 100))}%` }}></div>
-              <div className="w-full flex justify-between mt-2 text-[9px] text-slate-500 font-bold">
-                <span>EXTREME GREED (PCR {"<"} 0.6)</span>
-                <span>EXTREME FEAR (PCR {">"} 1.2)</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Whale CVD Tracker */}
-          <div className="bg-[#111827] rounded-lg border border-slate-800 p-4">
-            <h2 className="text-sm font-bold text-slate-300 mb-4">WHALE CVD TRACKER (&gt;$5K HITS)</h2>
-            <div className="grid grid-cols-2 gap-3 mb-4">
-              <div className="bg-[#0f172a] rounded p-3 text-center border border-slate-800">
-                <div className="text-xs text-slate-500 font-bold mb-1">SESSION CVD</div>
-                <div className={`text-lg font-bold ${cvdData.sessionCvd >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {cvdData.sessionCvd > 0 ? '+' : ''}{cvdData.sessionCvd.toFixed(2)}
-                </div>
-              </div>
-              <div className="bg-[#0f172a] rounded p-3 text-center border border-slate-800">
-                <div className="text-xs text-slate-500 font-bold mb-1">INSTANT DELTA</div>
-                <div className={`text-lg font-bold ${cvdData.instantDelta >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {cvdData.instantDelta > 0 ? '+' : ''}{cvdData.instantDelta.toFixed(2)}
-                </div>
-              </div>
-            </div>
-            <div className="w-full h-2 rounded flex overflow-hidden">
-              <div className="h-full bg-emerald-500" style={{ width: `${Math.max(10, (cvdData.buyVol / (cvdData.buyVol + cvdData.sellVol || 1)) * 100)}%` }}></div>
-              <div className="h-full bg-rose-500" style={{ width: `${Math.max(10, (cvdData.sellVol / (cvdData.buyVol + cvdData.sellVol || 1)) * 100)}%` }}></div>
-            </div>
-          </div>
-
-          {/* Paper Trading Bot */}
-          <div className="bg-[#111827] rounded-lg border border-indigo-900/50 p-4 shadow-[0_0_15px_rgba(79,70,229,0.1)] relative overflow-hidden">
-            {botState.active && <div className="absolute top-0 left-0 w-full h-1 bg-indigo-500 animate-pulse"></div>}
-            
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-sm font-bold flex items-center gap-2 text-slate-300">
-                <Database size={16} className={botState.active ? "text-indigo-400" : "text-slate-500"} /> AUTO-TRADER (PAPER)
-              </h2>
-              <button 
-                onClick={() => setBotState(p => ({...p, active: !p.active}))}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-bold transition-all ${botState.active ? 'bg-rose-500/20 text-rose-400 hover:bg-rose-500/30' : 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-lg'}`}
-              >
-                {botState.active ? <><Square size={12}/> STOP BOT</> : <><Play size={12}/> RUN BOT</>}
-              </button>
-            </div>
-
-            <div className="bg-[#0f172a] rounded p-3 flex justify-between items-center mb-3 border border-slate-800">
-              <span className="text-sm font-medium text-slate-400">Account Balance</span>
-              <span className="text-xl font-mono font-bold text-white">${botState.balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-            </div>
-
-            {botState.position ? (
-              <div className="bg-indigo-900/20 rounded p-3 border border-indigo-500/30">
-                <div className="flex justify-between text-xs mb-2">
-                  <span className={`font-bold ${botState.position.type === 'LONG' ? 'text-emerald-400' : 'text-rose-400'}`}>ACTIVE {botState.position.type}</span>
-                  <span className="text-slate-400">Entry: ${botState.position.entry.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between text-xs font-mono">
-                  <span className="text-rose-400">SL: ${botState.position.sl.toFixed(2)}</span>
-                  <span className="text-emerald-400">TP: ${botState.position.tp.toFixed(2)}</span>
-                </div>
-              </div>
-            ) : (
-              <div className="text-center text-xs text-slate-500 py-3 bg-[#0f172a] rounded border border-slate-800 border-dashed">
-                {botState.active ? "Sniffing Order Flow for 5/6 Setup..." : "Bot is offline."}
-              </div>
-            )}
-          </div>
-
-        </div>
-      </div>
-    </div>
-  );
+  return()=>ws.close()
+ },[]);
+ const sigs=useMemo(()=>Object.fromEntries(SYMS.map(s=>[s,signal(s,m[s])])),[m]);
+ const s=m[sel],c=CFG[sel],sig=sigs[sel],flow=s.buy+s.sell||1,buyPct=s.buy/flow*100,dist=s.price?(c.trigger-s.price)/s.price*100:null;
+ return <main className="shell">
+  <header><div><span className="eyebrow">LIVE ORDER FLOW MONITOR</span><h1>BTC · ETH · SOL <em>Trigger Watch</em></h1><p>1H breakout confirmation + order flow + 1H/4H bearish structure checks.</p></div><div className={'live '+(live?'ok':'bad')}>{live?<Wifi size={16}/>:<WifiOff size={16}/>} {live?'Binance live':'Reconnecting'}</div></header>
+  <section className="cards">{SYMS.map(sym=>{const x=m[sym],a=CFG[sym],g=sigs[sym],d=x.price?(a.trigger-x.price)/x.price*100:null;return <button key={sym} onClick={()=>setSel(sym)} className={'card '+(sel===sym?'selected':'')}><div className="head"><div><b>{a.t}</b><small>{a.name}</small></div><span className={'pill '+g.tone}>{g.label}</span></div><strong className="price">{money(x.price,a.d)}</strong><div className="row"><span>Trigger</span><b>{money(a.trigger,a.d)}</b></div><div className="row"><span>Distance</span><b>{d==null?'—':pc(d,2)}</b></div><div className="bar"><i style={{width:Math.max(0,Math.min(100,(x.imb+1)*50))+'%'}}/></div><div className="row tiny"><span>Top-20 bid/ask imbalance</span><b>{pc(x.imb*100,0)}</b></div></button>})}</section>
+  <section className="grid">
+   <article className="panel hero"><div className="title"><div><span>{c.t} SIGNAL ENGINE</span><h2>{sig.label}</h2></div><b className={'score '+sig.tone}>{Math.round(sig.score)}/10</b></div><div className="big">{money(s.price,c.d)}<small>Trigger {money(c.trigger,c.d)} · {dist==null?'—':Math.abs(dist).toFixed(2)+'% '+(dist>0?'below':'above')}</small></div><div className="reasons">{sig.reasons.map((r,i)=><div key={i}>● {r}</div>)}</div><div className="levels"><div><span>Closed 1H</span><b>{money(s.p1?.c,c.d)}</b></div><div><span>Prior 1H low</span><b>{money(s.p1?.l,c.d)}</b></div><div><span>Prior 4H low</span><b>{money(s.p4?.l,c.d)}</b></div><div><span>Current 4H high</span><b>{money(s.k4?.h,c.d)}</b></div></div></article>
+   <article className="panel"><span className="eyebrow">AGGRESSIVE FLOW / CVD</span><div className={(s.buy-s.sell)>=0?'metric green':'metric red'}>{(s.buy-s.sell)>=0?'+':''}{compact(s.buy-s.sell)}</div><div className="split"><i style={{width:buyPct+'%'}}/><b style={{width:(100-buyPct)+'%'}}/></div><div className="metrics"><div><span>Buys</span><b className="green">{compact(s.buy)}</b></div><div><span>Sells</span><b className="red">{compact(s.sell)}</b></div></div></article>
+   <article className="panel"><span className="eyebrow">ORDER BOOK DEPTH</span><div className={s.imb>=0?'metric green':'metric red'}>{pc(s.imb*100)}</div><div className="metrics"><div><span>Bid liquidity</span><b>{compact(s.bid)}</b></div><div><span>Ask liquidity</span><b>{compact(s.ask)}</b></div><div><span>Spread</span><b>{s.spread.toFixed(2)} bps</b></div><div><span>Reading</span><b>{s.imb>.08?'Bid-heavy':s.imb<-.08?'Ask-heavy':'Balanced'}</b></div></div></article>
+   <article className="panel"><span className="eyebrow">DERIVATIVES</span><div className="metric">{compact(s.oi)}</div><div className="metrics"><div><span>OI since load</span><b>{pc(s.oiPct)}</b></div><div><span>Funding</span><b>{s.funding==null?'—':(s.funding*100).toFixed(4)+'%'}</b></div></div><p className="note">OI change is session-relative. OI and funding use live Binance Futures data.</p></article>
+   <article className="panel rules"><span className="eyebrow">CLASSIFICATION RULES</span><div className="rulesgrid"><div><b>CONFIRMED</b><p>1H close above trigger with supportive CVD/depth and level holding.</p></div><div><b>WEAK</b><p>Price breaks but flow confirmation is insufficient.</p></div><div><b>FALSE-BREAKOUT RISK</b><p>Price breaks while CVD or depth contradicts the move.</p></div><div><b>BEARISH STRUCTURE</b><p>1H/4H support damage plus sell flow, ask pressure or deleveraging.</p></div></div></article>
+  </section>
+  <footer><span>{refreshed?'Candle/OI refreshed '+new Date(refreshed).toLocaleTimeString():'Loading…'}</span><button onClick={slow}><RefreshCw size={14}/> Refresh</button><span className="warning"><AlertTriangle size={13}/> Monitoring tool, not financial advice.</span></footer>
+ </main>
 }

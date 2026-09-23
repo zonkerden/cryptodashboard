@@ -513,46 +513,79 @@ export default function OrderFlowDashboard() {
   const renderVPVR = (props) => {
     if (!showIndicators.vpvr || chartData.length === 0) return null;
     const { yAxisMap, offset } = props;
-    if (!yAxisMap || !yAxisMap.price || !offset) return null;
+    if (!yAxisMap || !yAxisMap.price || !offset || offset.width === 0) return null;
 
     const yScale = yAxisMap.price.scale;
-    const binsCount = 50;
+    const binsCount = 60;
     
-    const minPrice = Math.min(...chartData.map(d => d.low));
-    const maxPrice = Math.max(...chartData.map(d => d.high));
-    if (minPrice === maxPrice) return null;
+    // Safety check: only use fully loaded candlesticks for math
+    const validData = chartData.filter(d => isFinite(d.low) && isFinite(d.high) && isFinite(d.close) && isFinite(d.volume));
+    if (validData.length === 0) return null;
+
+    const minPrice = Math.min(...validData.map(d => d.low));
+    const maxPrice = Math.max(...validData.map(d => d.high));
+    if (minPrice === maxPrice || !isFinite(minPrice) || !isFinite(maxPrice)) return null;
 
     const binSize = (maxPrice - minPrice) / binsCount;
     const bins = Array.from({ length: binsCount }, (_, i) => ({
       top: minPrice + ((i + 1) * binSize),
       bottom: minPrice + (i * binSize),
-      vol: 0
+      upVol: 0,
+      downVol: 0,
+      totalVol: 0
     }));
 
-    chartData.forEach(d => {
+    validData.forEach(d => {
       const typPrice = (d.low + d.high + d.close) / 3;
       let idx = Math.floor((typPrice - minPrice) / binSize);
       idx = Math.max(0, Math.min(idx, binsCount - 1));
-      bins[idx].vol += (isFinite(d.volume) ? d.volume : 0);
+      
+      const vol = d.volume;
+      bins[idx].totalVol += vol;
+      
+      // Split into Buying vs Selling aggression
+      if (d.close >= d.open) {
+        bins[idx].upVol += vol;
+      } else {
+        bins[idx].downVol += vol;
+      }
     });
 
-    const maxVol = Math.max(...bins.map(b => b.vol));
-    if (maxVol === 0) return null;
+    const maxVol = Math.max(...bins.map(b => b.totalVol));
+    if (maxVol === 0 || !isFinite(maxVol)) return null;
 
-    const maxBarWidth = offset.width * 0.25; 
+    const maxBarWidth = offset.width * 0.35; // Take up 35% of chart screen
     const startX = offset.left + offset.width;
 
     return (
-      <g className="vpvr-layer">
+      <g className="vpvr-layer" style={{ pointerEvents: 'none' }}>
         {bins.map((bin, i) => {
+          if (bin.totalVol === 0) return null;
+          
           const y1 = yScale(bin.top);
           const y2 = yScale(bin.bottom);
+          
+          if (!isFinite(y1) || !isFinite(y2)) return null;
+          
           const topY = Math.min(y1, y2);
           const rectHeight = Math.max(Math.abs(y1 - y2) - 1, 1);
-          const width = (bin.vol / maxVol) * maxBarWidth;
           
-          if (width === 0) return null;
-          return <rect key={`vpvr-${i}`} x={startX - width} y={topY} width={width} height={rectHeight} fill="#3b82f6" fillOpacity={0.25} />;
+          const totalWidth = (bin.totalVol / maxVol) * maxBarWidth;
+          const upWidth = (bin.upVol / bin.totalVol) * totalWidth;
+          const downWidth = (bin.downVol / bin.totalVol) * totalWidth;
+
+          if (!isFinite(totalWidth)) return null;
+
+          return (
+            <g key={`vpvr-${i}`}>
+              {/* Selling Volume (Red) */}
+              <rect x={startX - totalWidth} y={topY} width={downWidth} height={rectHeight} fill="#f43f5e" fillOpacity={0.4} />
+              {/* Buying Volume (Green) */}
+              <rect x={startX - totalWidth + downWidth} y={topY} width={upWidth} height={rectHeight} fill="#10b981" fillOpacity={0.4} />
+              {/* Dark Outline for depth perception */}
+              <rect x={startX - totalWidth} y={topY} width={totalWidth} height={rectHeight} fill="none" stroke="#1e293b" strokeWidth={0.5} strokeOpacity={0.5} />
+            </g>
+          );
         })}
       </g>
     );

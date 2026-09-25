@@ -140,7 +140,7 @@ function V3FlowTerminal() {
   });
 
   // Flow State
-  const [optionsData, setOptionsData] = useState({ pcr: 0.58, maxPain: 95000 });
+  const [optionsData, setOptionsData] = useState({ pcr: 0.58, maxPain: 0 });
   const [cvdData, setCvdData] = useState({ sessionCvd: 20.48, instantDelta: 0, buyVol: 50, sellVol: 50 });
 
   // Bot State (LocalStorage Persistence)
@@ -160,6 +160,73 @@ function V3FlowTerminal() {
   const chartDataRef = useRef([]);
   const volumeRef = useRef({ buy: 50, sell: 50, rollingBuy: 0, rollingSell: 0 });
   const wsRef = useRef(null);
+
+  // --- NEW: Live Deribit Options Flow Engine ---
+  useEffect(() => {
+    let isMounted = true;
+    
+    const fetchOptionsData = async () => {
+      // Extract base coin (BTC, ETH, SOL)
+      const coin = selectedPair.replace('USDT', '');
+      
+      try {
+        const res = await fetch(`https://www.deribit.com/api/v2/public/get_book_summary_by_currency?currency=${coin}&kind=option`);
+        const json = await res.json();
+        
+        if (!isMounted || !json.result) return;
+        
+        let totalCalls = 0;
+        let totalPuts = 0;
+        let strikesOI = {}; // Tracks Open Interest per strike price
+        
+        // Sift through the entire options book
+        json.result.forEach(contract => {
+          // Deribit Contract format: BTC-27SEP26-90000-C
+          const parts = contract.instrument_name.split('-');
+          if (parts.length !== 4) return;
+          
+          const strike = parseFloat(parts[2]);
+          const type = parts[3]; // 'C' for Call, 'P' for Put
+          const oi = contract.open_interest || 0;
+          
+          if (type === 'C') totalCalls += oi;
+          if (type === 'P') totalPuts += oi;
+          
+          if (!strikesOI[strike]) strikesOI[strike] = 0;
+          strikesOI[strike] += oi;
+        });
+        
+        // 1. Calculate Real Put/Call Ratio
+        const pcr = totalCalls > 0 ? (totalPuts / totalCalls) : 0.5;
+        
+        // 2. Find Gamma Wall (The specific Strike Price with the highest Open Interest)
+        let maxPainStrike = 0;
+        let highestOI = 0;
+        
+        for (const [strike, oi] of Object.entries(strikesOI)) {
+          if (oi > highestOI) {
+            highestOI = oi;
+            maxPainStrike = parseFloat(strike);
+          }
+        }
+        
+        if (maxPainStrike > 0) {
+          setOptionsData({ pcr, maxPain: maxPainStrike });
+        }
+      } catch (error) {
+        console.warn("Deribit API blocked or unavailable. Waiting for next cycle.");
+      }
+    };
+
+    // Fetch immediately on coin swap, then loop every 5 minutes
+    fetchOptionsData();
+    const optionsInterval = setInterval(fetchOptionsData, 300000); 
+
+    return () => {
+      isMounted = false;
+      clearInterval(optionsInterval);
+    };
+  }, [selectedPair]);
 
   useEffect(() => {
     let isMounted = true;

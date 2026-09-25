@@ -24,6 +24,17 @@ import {
   TrendingDown,
   Clock
 } from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, setDoc, onSnapshot } from 'firebase/firestore';
+
+// --- FIREBASE INITIALIZATION ---
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+const app = firebaseConfig && Object.keys(firebaseConfig).length > 0 ? initializeApp(firebaseConfig) : null;
+const auth = app ? getAuth(app) : null;
+const db = app ? getFirestore(app) : null;
+const rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const appId = rawAppId.replace(/\//g, '-');
 
 if (typeof window !== 'undefined' && !document.getElementById('tailwind-cdn')) {
   const script = document.createElement('script');
@@ -152,14 +163,55 @@ function V3FlowTerminal() {
     return { active: false, balance: 10000, position: null, history: [] };
   });
 
+  // --- CLOUD SYNC STATE ---
+  const [user, setUser] = useState(null);
+  const [cloudSyncReady, setCloudSyncReady] = useState(false);
+
+  // 1. Cloud Authentication
+  useEffect(() => {
+    if (!auth) return;
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch(e) { console.error("Cloud Auth Failed:", e); }
+    };
+    initAuth();
+    const unsub = onAuthStateChanged(auth, setUser);
+    return () => unsub();
+  }, []);
+
+  // 2. Fetch Initial Cloud Data & Listen for Remote Changes
+  useEffect(() => {
+    if (!user || !db) return;
+    const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'bot_data', 'state');
+    const unsub = onSnapshot(docRef, (snapshot) => {
+      if (snapshot.exists()) {
+        setBotState(snapshot.data());
+      }
+      setCloudSyncReady(true);
+    }, console.error);
+    return () => unsub();
+  }, [user]);
+
+  // 3. Save to Cloud on changes (Combined with LocalStorage fallback)
   useEffect(() => {
     localStorage.setItem('v3_bot_data', JSON.stringify(botState));
-  }, [botState]);
+    
+    if (user && db && cloudSyncReady) {
+      const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'bot_data', 'state');
+      setDoc(docRef, botState).catch(console.error);
+    }
+  }, [botState, user, cloudSyncReady]);
 
   // High-Performance Data Refs (Bypasses React Freezing)
   const chartDataRef = useRef([]);
   const volumeRef = useRef({ buy: 0, sell: 0, rollingBuy: 0, rollingSell: 0 });
   const wsRef = useRef(null);
+  const lastTradeIdRef = useRef(0);
 
   // --- NEW: Live Deribit Options Flow Engine ---
   useEffect(() => {
@@ -238,6 +290,7 @@ function V3FlowTerminal() {
     // WIPE THE MEMORY BANK ON COIN/TIMEFRAME SWAP
     volumeRef.current = { buy: 0, sell: 0, rollingBuy: 0, rollingSell: 0 };
     setCvdData({ sessionCvd: 0, instantDelta: 0, buyVol: 0, sellVol: 0 });
+    lastTradeIdRef.current = 0;
 
     // 1. Race Multiple REST Endpoints for Historical Data (Bypasses ISP Blocks)
     const fetchHistorical = async () => {
@@ -303,6 +356,10 @@ function V3FlowTerminal() {
 
           // A. Handle Tick Trades (Whale Filter & Live Price)
           if (msg.stream.includes('@trade')) {
+            const tradeId = msg.data.t;
+            if (tradeId <= lastTradeIdRef.current) return; // Prevent duplicates
+            lastTradeIdRef.current = tradeId;
+
             const price = parseFloat(msg.data.p);
             const qty = parseFloat(msg.data.q);
             const isSell = msg.data.m;
@@ -366,6 +423,8 @@ function V3FlowTerminal() {
               if (trades.length > 0) {
                 setLivePrice(parseFloat(trades[trades.length - 1].price));
                 trades.forEach(t => {
+                  if (t.id <= lastTradeIdRef.current) return; // Skip trades we already counted!
+                  
                   const p = parseFloat(t.price);
                   const q = parseFloat(t.qty);
                   if (p * q > 5000) {
@@ -378,6 +437,7 @@ function V3FlowTerminal() {
                     }
                   }
                 });
+                lastTradeIdRef.current = trades[trades.length - 1].id; // Save newest trade ID
               }
             }
 
@@ -847,7 +907,10 @@ function V3FlowTerminal() {
             </div>
 
             <div className="text-center text-[9px] text-slate-600 mt-5 uppercase tracking-widest font-bold">
-              Data feed active. Network bypass operational.
+              Data feed active. Network bypass operational.<br/>
+              <span className={user ? "text-indigo-400" : "text-slate-600"}>
+                {user ? "☁️ SECURE CLOUD SYNC CONNECTED" : "LOCAL STORAGE ONLY"}
+              </span>
             </div>
           </div>
 

@@ -141,7 +141,7 @@ function V3FlowTerminal() {
 
   // Flow State
   const [optionsData, setOptionsData] = useState({ pcr: 0.58, maxPain: 0 });
-  const [cvdData, setCvdData] = useState({ sessionCvd: 20.48, instantDelta: 0, buyVol: 50, sellVol: 50 });
+  const [cvdData, setCvdData] = useState({ sessionCvd: 0, instantDelta: 0, buyVol: 0, sellVol: 0 });
 
   // Bot State (LocalStorage Persistence)
   const [botState, setBotState] = useState(() => {
@@ -158,7 +158,7 @@ function V3FlowTerminal() {
 
   // High-Performance Data Refs (Bypasses React Freezing)
   const chartDataRef = useRef([]);
-  const volumeRef = useRef({ buy: 50, sell: 50, rollingBuy: 0, rollingSell: 0 });
+  const volumeRef = useRef({ buy: 0, sell: 0, rollingBuy: 0, rollingSell: 0 });
   const wsRef = useRef(null);
 
   // --- NEW: Live Deribit Options Flow Engine ---
@@ -234,6 +234,10 @@ function V3FlowTerminal() {
 
     const tfConfig = TIMEFRAMES[selectedTimeframe];
     chartDataRef.current = [];
+    
+    // WIPE THE MEMORY BANK ON COIN/TIMEFRAME SWAP
+    volumeRef.current = { buy: 0, sell: 0, rollingBuy: 0, rollingSell: 0 };
+    setCvdData({ sessionCvd: 0, instantDelta: 0, buyVol: 0, sellVol: 0 });
 
     // 1. Race Multiple REST Endpoints for Historical Data (Bypasses ISP Blocks)
     const fetchHistorical = async () => {

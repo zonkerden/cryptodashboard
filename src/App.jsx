@@ -25,6 +25,13 @@ import {
   Clock
 } from 'lucide-react';
 
+if (typeof window !== 'undefined' && !document.getElementById('tailwind-cdn')) {
+  const script = document.createElement('script');
+  script.id = 'tailwind-cdn';
+  script.src = 'https://cdn.tailwindcss.com';
+  document.head.appendChild(script);
+}
+
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);

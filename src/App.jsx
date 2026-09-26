@@ -65,13 +65,30 @@ export default function App() {
   const pollingTimerRef = useRef(null);
   const instantDeltaTimerRef = useRef(null);
 
-  // --- TAILWIND INJECTION (Safety Net) ---
+  // --- CSS & TAILWIND INJECTION (Premium Polish) ---
   useEffect(() => {
+    // 1. Force the browser tab name to update (Bypasses HTML cache)
+    document.title = "V3 FlowTerminal | Institutional Flow";
+
+    // 2. Inject Tailwind if missing
     if (!document.getElementById('tailwind-script')) {
       const script = document.createElement('script');
       script.id = 'tailwind-script';
       script.src = 'https://cdn.tailwindcss.com';
       document.head.appendChild(script);
+    }
+
+    // 3. Inject Cyberpunk Scrollbars
+    if (!document.getElementById('premium-css')) {
+      const style = document.createElement('style');
+      style.id = 'premium-css';
+      style.innerHTML = `
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.4); border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(99, 102, 241, 0.4); border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(99, 102, 241, 0.8); }
+      `;
+      document.head.appendChild(style);
     }
   }, []);
 
@@ -90,14 +107,21 @@ export default function App() {
   useEffect(() => {
     const fetchDeribit = async () => {
       try {
-        const res = await fetch(`https://www.deribit.com/api/v2/public/get_book_summary_by_currency?currency=${coin}&kind=option`);
+        // Altcoins like SOL are settled in the USDC pool on Deribit
+        const fetchCurrency = coin === 'BTC' || coin === 'ETH' ? coin : 'USDC';
+        const res = await fetch(`https://www.deribit.com/api/v2/public/get_book_summary_by_currency?currency=${fetchCurrency}&kind=option`);
         const json = await res.json();
+        
+        if (!json.result) throw new Error("Deribit API Error");
         const opts = json.result;
 
         let callVol = 0; let putVol = 0;
         let strikeOI = {};
 
         opts.forEach(item => {
+          // If fetching the USDC pool, isolate the specific coin (e.g. SOL)
+          if (fetchCurrency === 'USDC' && !item.instrument_name.startsWith(coin)) return;
+
           const parts = item.instrument_name.split('-');
           if (parts.length === 4) {
             const strike = parseFloat(parts[2]);
@@ -120,8 +144,9 @@ export default function App() {
         });
 
         const bias = pcr < 0.7 ? 'Bullish' : pcr > 1 ? 'Bearish' : 'Neutral';
-        setOptionsData({ pcr: pcr.toFixed(2), maxPain, bias });
+        setOptionsData({ pcr: pcr.toFixed(2), maxPain: maxPain || (coin === 'BTC' ? 95000 : coin === 'ETH' ? 3500 : 150), bias });
       } catch (e) {
+        // Fallbacks if Deribit fails or is blocked by ISP
         setOptionsData({ pcr: 0.58, maxPain: coin === 'BTC' ? 95000 : coin === 'ETH' ? 3500 : 150, bias: 'Bullish' });
       }
     };
@@ -300,7 +325,25 @@ export default function App() {
   }, [scoreEngine.score, cloudState.isRunning]);
 
   // --- RENDER ENGINE ---
-  if (data.length === 0) return <div className="h-screen w-full bg-[#050810] text-white flex items-center justify-center font-mono">Initializing Neural Link...</div>;
+  if (data.length === 0) {
+    return (
+      <div className="h-screen w-full bg-[#050810] flex flex-col items-center justify-center font-mono relative overflow-hidden">
+        {/* Deep Space Background for Loader */}
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-indigo-900/20 via-[#050810] to-[#050810]" />
+        
+        <Database className="text-indigo-500 animate-pulse mb-6 drop-shadow-[0_0_15px_rgba(99,102,241,0.8)] z-10" size={56} />
+        <div className="text-indigo-400 font-extrabold tracking-widest text-sm uppercase flex items-center gap-3 z-10">
+          <RefreshCw size={16} className="animate-spin" />
+          Initializing Neural Link...
+        </div>
+        
+        {/* Cyberpunk Progress Bar */}
+        <div className="w-64 h-1.5 bg-slate-900 rounded-full mt-8 overflow-hidden z-10 border border-white/5 shadow-[0_0_10px_rgba(99,102,241,0.2)]">
+          <div className="h-full bg-indigo-500 w-1/2 animate-[ping_1.5s_ease-in-out_infinite] rounded-full shadow-[0_0_10px_rgba(99,102,241,0.8)]"></div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen w-full bg-[#050810] text-white font-sans overflow-hidden flex relative selection:bg-indigo-500/30">
@@ -319,13 +362,13 @@ export default function App() {
               <h1 className="text-3xl font-extrabold tracking-tighter">V3 Flow<span className="text-indigo-400">Terminal</span></h1>
             </div>
             
-            <div className="flex gap-3 mb-2 bg-[#0f172a]/40 p-1.5 rounded-lg border border-white/5 backdrop-blur-md w-fit">
+            <div className="flex gap-3 mb-2 bg-[#0f172a]/40 p-1.5 rounded-lg border border-white/5 backdrop-blur-md w-fit shadow-lg">
               {['BTC', 'ETH', 'SOL'].map(c => (
                 <button key={c} onClick={() => setCoin(c)} className={`px-4 py-1.5 text-xs font-bold rounded transition-all ${coin === c ? 'bg-indigo-600 shadow-[0_0_15px_rgba(79,70,229,0.5)] text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>{c}</button>
               ))}
               <div className="w-px bg-white/10 mx-1"></div>
               {['1m', '5m', '15m', '1h'].map(t => (
-                <button key={t} onClick={() => setTimeframe(t)} className={`px-4 py-1.5 text-xs font-bold rounded transition-all ${timeframe === t ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>{t}</button>
+                <button key={t} onClick={() => setTimeframe(t)} className={`px-4 py-1.5 text-xs font-bold rounded transition-all ${timeframe === t ? 'bg-slate-700 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>{t}</button>
               ))}
             </div>
           </div>
@@ -367,6 +410,14 @@ export default function App() {
 
           <ResponsiveContainer width="100%" height="100%" className="z-10 relative">
             <ComposedChart data={data} margin={{ top: 20, right: 10, left: 0, bottom: 20 }}>
+              {/* Premium Gradient for Volume Bars */}
+              <defs>
+                <linearGradient id="colorVol" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#334155" stopOpacity={0.8}/>
+                  <stop offset="95%" stopColor="#0f172a" stopOpacity={0.1}/>
+                </linearGradient>
+              </defs>
+
               <XAxis dataKey="timestamp" hide />
               
               {/* Primary Price Axis */}
@@ -375,9 +426,9 @@ export default function App() {
               {/* Hidden Secondary Volume Axis (Scaled to bottom 25% of chart height) */}
               <YAxis yAxisId="vol" domain={[0, maxVol * 4]} hide />
               
-              <Tooltip cursor={{stroke: '#334155'}} contentStyle={{backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#fff', borderRadius: '8px'}} />
+              <Tooltip cursor={{stroke: '#334155'}} contentStyle={{backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#fff', borderRadius: '8px', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.5)'}} />
               
-              <Bar yAxisId="vol" dataKey="vol" fill="#1e293b" />
+              <Bar yAxisId="vol" dataKey="vol" fill="url(#colorVol)" />
               
               <Bar yAxisId="price" dataKey="candleRange" shape={(props) => <CandlestickShape {...props} />} />
               

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { ComposedChart, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Bar, Line } from 'recharts';
+import { ComposedChart, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Bar, Line, Cell } from 'recharts';
 import { Activity, Server, Target, RefreshCw, Database } from 'lucide-react';
 
 // --- ENGINE CONFIGURATION ---
@@ -67,7 +67,7 @@ export default function App() {
 
   // --- CSS & TAILWIND INJECTION (Premium Polish) ---
   useEffect(() => {
-    // 1. Force the browser tab name to update (Bypasses HTML cache)
+    // 1. Force the browser tab name to update
     document.title = "V3 FlowTerminal | Institutional Flow";
 
     // 2. Inject Tailwind if missing
@@ -290,14 +290,23 @@ export default function App() {
     let closed = false;
     let pnl = 0;
     let result = '';
+    let exitPrice = 0;
 
     if (trade.type === 'LONG') {
-      if (livePrice >= trade.tp) { closed = true; pnl = (cloudState.balance * 0.03); result = 'SUCCESS'; }
-      if (livePrice <= trade.sl) { closed = true; pnl = -(cloudState.balance * 0.01); result = 'FAIL'; }
+      if (livePrice >= trade.tp) { closed = true; pnl = (cloudState.balance * 0.03); result = 'SUCCESS'; exitPrice = trade.tp; }
+      if (livePrice <= trade.sl) { closed = true; pnl = -(cloudState.balance * 0.01); result = 'FAIL'; exitPrice = trade.sl; }
     }
 
     if (closed) {
-      const newLog = { id: Date.now(), pair: trade.pair, type: trade.type, pnl, result };
+      const newLog = { 
+        id: Date.now(), 
+        pair: trade.pair, 
+        type: trade.type, 
+        entryPrice: trade.entry,
+        exitPrice: exitPrice,
+        pnl, 
+        result 
+      };
       const newHistory = [newLog, ...cloudState.history].slice(0, 15);
       
       saveToCloud({
@@ -367,7 +376,8 @@ export default function App() {
                 <button key={c} onClick={() => setCoin(c)} className={`px-4 py-1.5 text-xs font-bold rounded transition-all ${coin === c ? 'bg-indigo-600 shadow-[0_0_15px_rgba(79,70,229,0.5)] text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>{c}</button>
               ))}
               <div className="w-px bg-white/10 mx-1"></div>
-              {['1m', '5m', '15m', '1h'].map(t => (
+              {/* Added 4h timeframe! */}
+              {['1m', '5m', '15m', '1h', '4h'].map(t => (
                 <button key={t} onClick={() => setTimeframe(t)} className={`px-4 py-1.5 text-xs font-bold rounded transition-all ${timeframe === t ? 'bg-slate-700 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>{t}</button>
               ))}
             </div>
@@ -412,9 +422,13 @@ export default function App() {
             <ComposedChart data={data} margin={{ top: 20, right: 10, left: 0, bottom: 20 }}>
               {/* Premium Gradient for Volume Bars */}
               <defs>
-                <linearGradient id="colorVol" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#334155" stopOpacity={0.8}/>
-                  <stop offset="95%" stopColor="#0f172a" stopOpacity={0.1}/>
+                <linearGradient id="colorVolBuy" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#10B981" stopOpacity={0.3}/>
+                  <stop offset="100%" stopColor="#10B981" stopOpacity={0.0}/>
+                </linearGradient>
+                <linearGradient id="colorVolSell" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#EF4444" stopOpacity={0.3}/>
+                  <stop offset="100%" stopColor="#EF4444" stopOpacity={0.0}/>
                 </linearGradient>
               </defs>
 
@@ -428,7 +442,11 @@ export default function App() {
               
               <Tooltip cursor={{stroke: '#334155'}} contentStyle={{backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#fff', borderRadius: '8px', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.5)'}} />
               
-              <Bar yAxisId="vol" dataKey="vol" fill="url(#colorVol)" />
+              <Bar yAxisId="vol" dataKey="vol" radius={[4, 4, 0, 0]}>
+                {data.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={entry.close >= entry.open ? "url(#colorVolBuy)" : "url(#colorVolSell)"} />
+                ))}
+              </Bar>
               
               <Bar yAxisId="price" dataKey="candleRange" shape={(props) => <CandlestickShape {...props} />} />
               
@@ -583,8 +601,15 @@ export default function App() {
                         {log.type} • {log.result}
                       </span>
                     </div>
-                    <div className={`font-mono font-bold tracking-tighter text-sm ${log.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                      {log.pnl >= 0 ? '+' : ''}${log.pnl.toFixed(2)}
+                    <div className="flex flex-col items-end text-right">
+                      <span className={`font-mono font-bold tracking-tighter text-sm ${log.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {log.pnl >= 0 ? '+' : ''}${log.pnl.toFixed(2)}
+                      </span>
+                      {log.entryPrice && (
+                        <span className="text-[8px] text-slate-500 font-mono mt-0.5 font-semibold">
+                          EP: ${log.entryPrice.toFixed(1)} → XP: ${log.exitPrice.toFixed(1)}
+                        </span>
+                      )}
                     </div>
                   </div>
                 ))}

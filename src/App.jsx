@@ -305,9 +305,9 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-[#05080f] to-black text-slate-200 font-sans p-6 grid grid-cols-4 gap-6 selection:bg-indigo-500/30">
+    <div className="h-screen w-full overflow-hidden bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-[#05080f] to-black text-slate-200 font-sans p-6 grid grid-cols-4 gap-6 selection:bg-indigo-500/30">
       
-      <div className="col-span-3 flex flex-col h-[92vh]">
+      <div className="col-span-3 flex flex-col h-full min-h-0 pb-2">
         <div className="flex justify-between items-end mb-6 px-2">
           <div>
             <div className="flex items-center gap-3 mb-4">
@@ -403,9 +403,9 @@ export default function App() {
         </div>
       </div>
 
-      <div className="col-span-1 flex flex-col gap-5 h-[92vh] overflow-y-auto pr-2 custom-scrollbar">
+      <div className="col-span-1 flex flex-col gap-5 h-full overflow-y-auto pr-2 pb-6 custom-scrollbar">
         
-        <div className="bg-[#0f172a]/60 backdrop-blur-xl rounded-2xl border border-white/5 p-5 shadow-xl">
+        <div className="shrink-0 bg-[#0f172a]/60 backdrop-blur-xl rounded-2xl border border-white/5 p-5 shadow-xl">
           <h2 className="text-[10px] font-extrabold text-slate-500 mb-4 flex items-center gap-2 tracking-widest uppercase"><Target size={14} className="text-indigo-400"/> Order Flow Engine</h2>
           <div className="grid grid-cols-2 gap-2.5">
             {Object.keys(showIndicators).map(key => (
@@ -416,7 +416,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="bg-[#0f172a]/60 backdrop-blur-xl rounded-2xl border border-white/5 p-5 shadow-xl">
+        <div className="shrink-0 bg-[#0f172a]/60 backdrop-blur-xl rounded-2xl border border-white/5 p-5 shadow-xl">
           <div className="flex justify-between items-end mb-4">
             <span className="text-[9px] text-slate-500 font-bold tracking-widest uppercase">Engine Status</span>
             <span className="text-[9px] text-slate-500 font-bold tracking-widest uppercase">Alignment</span>
@@ -448,7 +448,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="bg-[#0f172a]/60 backdrop-blur-xl rounded-2xl border border-white/5 p-5 shadow-xl">
+        <div className="shrink-0 bg-[#0f172a]/60 backdrop-blur-xl rounded-2xl border border-white/5 p-5 shadow-xl">
           <h2 className="text-[10px] font-extrabold text-slate-500 mb-4 flex items-center gap-2 tracking-widest uppercase"><Activity size={14} className="text-cyan-400"/> Whale CVD {'>'} $5K</h2>
           <div className="grid grid-cols-2 gap-3 mb-1">
             <div className="bg-black/40 p-4 rounded-xl text-center border border-white/5 shadow-inner">
@@ -466,7 +466,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="bg-[#0f172a]/80 backdrop-blur-2xl rounded-2xl border border-indigo-500/20 p-5 flex-1 flex flex-col shadow-[0_0_30px_rgba(79,70,229,0.15)] relative overflow-hidden">
+        <div className="shrink-0 min-h-[350px] bg-[#0f172a]/80 backdrop-blur-2xl rounded-2xl border border-indigo-500/20 p-5 flex flex-col shadow-[0_0_30px_rgba(79,70,229,0.15)] relative overflow-hidden">
           {cloudState.isRunning && <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-cyan-500 animate-pulse"></div>}
           
           <h2 className="text-[10px] font-extrabold text-slate-300 mb-5 flex items-center gap-2 tracking-widest uppercase"><Server size={14} className={cloudState.isRunning ? "text-indigo-400 animate-pulse" : "text-slate-500"}/> Cloud Auto-Trader</h2>

@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { ComposedChart, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Bar, Line, Cell } from 'recharts';
-import { Activity, Server, Target, RefreshCw, Database, Terminal, Cpu } from 'lucide-react';
+import { Activity, Server, Target, RefreshCw, Terminal, Cpu } from 'lucide-react';
 
 const BINANCE_REST = 'https://data-api.binance.vision/api/v3';
 const MOCK_APP_ID = "v3-flow-terminal-master"; 
 
+// Pure functional component prevents React object compilation crashes
 const CandlestickShape = (props) => {
   const { x, y, width, height, payload } = props;
   if (!payload || typeof payload.open === 'undefined' || typeof payload.high === 'undefined') return null;
@@ -83,7 +84,7 @@ export default function App() {
         .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(99, 102, 241, 0.4); border-radius: 4px; box-shadow: 0 0 10px rgba(99, 102, 241, 0.5); }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(99, 102, 241, 0.8); }
 
-        /* CRT Scanline Overlay - Opacity reduced for readability */
+        /* Faded CRT Scanline Overlay for better text readability */
         .scanlines {
           background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0) 50%, rgba(0,0,0,0.1) 50%, rgba(0,0,0,0.1));
           background-size: 100% 4px;
@@ -273,26 +274,71 @@ export default function App() {
     return [lowest - buffer, highest + buffer];
   }, [highest, lowest]);
 
+  const maxPainRenderData = useMemo(() => {
+    if (!yAxisDomain || yAxisDomain.length < 2) return null;
+    const [min, max] = yAxisDomain;
+    const range = max - min;
+    const mp = optionsData.maxPain;
+    
+    // Pin to top 2% of screen if it's way above
+    if (mp > max) {
+        return { y: max - (range * 0.02), label: `[ GAMMA WALL: $${mp.toLocaleString()} ↗ ]`, position: 'insideBottomLeft' };
+    } 
+    // Pin to bottom 2% of screen if it's way below
+    else if (mp < min) {
+        return { y: min + (range * 0.02), label: `[ GAMMA WALL: $${mp.toLocaleString()} ↘ ]`, position: 'insideTopLeft' };
+    }
+    // Render normally if it fits on the screen
+    return { y: mp, label: `[ MAX PAIN: $${mp.toLocaleString()} ]`, position: 'insideTopLeft' };
+  }, [optionsData.maxPain, yAxisDomain]);
+
   const maxVol = useMemo(() => Math.max(...data.map(d => d.vol), 0), [data]);
 
   const scoreEngine = useMemo(() => {
-    let score = 0;
-    const locDist = Math.abs(livePrice - lowest) / lowest;
-    const atSupport = locDist < 0.005; 
-    if (atSupport) score += 2;
+    let longScore = 0;
+    let shortScore = 0;
+    let currentVwap = data.length > 0 ? data[data.length - 1].vwap : livePrice;
 
-    const abs = volumeRef.current.instantDelta < -50000;
-    if (abs && atSupport) score += 2;
+    // Distance to key levels
+    const distToSupport = Math.abs(livePrice - lowest) / lowest;
+    const distToResistance = Math.abs(highest - livePrice) / highest;
+
+    const atSupport = distToSupport < 0.005; 
+    const atResistance = distToResistance < 0.005; 
+
+    if (atSupport) longScore += 2;
+    if (atResistance) shortScore += 2;
+
+    // Tape / Delta Logic
+    const strongBuyDelta = volumeRef.current.instantDelta > 5000;
+    const strongSellDelta = volumeRef.current.instantDelta < -5000;
     
-    if (optionsData.bias === 'Bullish') score += 2;
+    if (atSupport && strongBuyDelta) longScore += 2;
+    if (atResistance && strongSellDelta) shortScore += 2;
+
+    // Trend / VWAP alignment
+    if (livePrice > currentVwap) longScore += 1;
+    if (livePrice < currentVwap) shortScore += 1;
+    
+    // Options Bias
+    if (optionsData.bias === 'Bullish') longScore += 1;
+    if (optionsData.bias === 'Bearish') shortScore += 1;
+
+    // Determine Dominant Setup
+    const isLongSetup = longScore >= shortScore;
+    const finalScore = Math.max(longScore, shortScore);
 
     return {
-      score,
-      location: atSupport ? 'Support Detected' : 'Mid-Range',
-      dom: atSupport ? 'Buy Wall Present' : 'Neutral DOM',
-      tape: abs ? 'Buyer Absorption' : 'Standard Flow'
+      score: finalScore,
+      type: isLongSetup ? 'LONG' : 'SHORT',
+      conditions: [
+        { label: 'Price Location', value: atSupport ? 'Support Bound' : atResistance ? 'Resistance Bound' : 'Mid-Range', good: atSupport || atResistance },
+        { label: 'Trend Align (VWAP)', value: isLongSetup && livePrice > currentVwap ? 'Bullish' : (!isLongSetup && livePrice < currentVwap ? 'Bearish' : 'Fighting Trend'), good: (isLongSetup && livePrice > currentVwap) || (!isLongSetup && livePrice < currentVwap) },
+        { label: 'Tape Flow', value: isLongSetup && strongBuyDelta ? 'Buyer Step-in' : (!isLongSetup && strongSellDelta ? 'Seller Step-in' : 'Neutral Tape'), good: (isLongSetup && strongBuyDelta) || (!isLongSetup && strongSellDelta) },
+        { label: 'Options Bias', value: optionsData.bias, good: (isLongSetup && optionsData.bias === 'Bullish') || (!isLongSetup && optionsData.bias === 'Bearish') }
+      ]
     };
-  }, [livePrice, lowest, optionsData, data.length]);
+  }, [livePrice, lowest, highest, optionsData, data.length]);
 
   useEffect(() => {
     if (!cloudState.activeTrade || !cloudState.isRunning) return;
@@ -303,9 +349,15 @@ export default function App() {
     let result = '';
     let exitPrice = 0;
 
+    // Handle Long Resolution (Wider 1.5% SL to prevent noise-outs)
     if (trade.type === 'LONG') {
       if (livePrice >= trade.tp) { closed = true; pnl = (cloudState.balance * 0.03); result = 'SUCCESS'; exitPrice = trade.tp; }
-      if (livePrice <= trade.sl) { closed = true; pnl = -(cloudState.balance * 0.01); result = 'FAIL'; exitPrice = trade.sl; }
+      else if (livePrice <= trade.sl) { closed = true; pnl = -(cloudState.balance * 0.015); result = 'FAIL'; exitPrice = trade.sl; }
+    } 
+    // Handle Short Resolution
+    else if (trade.type === 'SHORT') {
+      if (livePrice <= trade.tp) { closed = true; pnl = (cloudState.balance * 0.03); result = 'SUCCESS'; exitPrice = trade.tp; }
+      else if (livePrice >= trade.sl) { closed = true; pnl = -(cloudState.balance * 0.015); result = 'FAIL'; exitPrice = trade.sl; }
     }
 
     if (closed) {
@@ -331,18 +383,19 @@ export default function App() {
 
   useEffect(() => {
     if (cloudState.isRunning && !cloudState.activeTrade && scoreEngine.score >= 5) {
+      const type = scoreEngine.type;
       saveToCloud({
         ...cloudState,
         activeTrade: {
           pair: coin,
-          type: 'LONG',
+          type: type,
           entry: livePrice,
-          sl: livePrice * 0.99,
-          tp: livePrice * 1.03
+          sl: type === 'LONG' ? livePrice * 0.985 : livePrice * 1.015,
+          tp: type === 'LONG' ? livePrice * 1.03 : livePrice * 0.97
         }
       });
     }
-  }, [scoreEngine.score, cloudState.isRunning]);
+  }, [scoreEngine.score, scoreEngine.type, cloudState.isRunning, coin, livePrice]);
 
   if (data.length === 0) {
     return (
@@ -370,47 +423,49 @@ export default function App() {
   const putPct = (optionsData.putVol / totalOptionsVol) * 100;
 
   return (
-    <div className="h-screen w-full bg-[#020617] text-slate-200 font-sans overflow-hidden flex relative selection:bg-indigo-500/30 tech-grid">
+    <div className="h-screen w-full bg-[#020617] text-slate-200 font-sans overflow-y-auto lg:overflow-hidden flex flex-col lg:flex-row relative selection:bg-indigo-500/30 tech-grid">
       <div className="scanlines"></div>
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-900/10 via-[#020617]/80 to-[#020617] pointer-events-none -z-10" />
       
-      {/* MAIN CHART PANEL */}
-      <div className="flex-1 flex flex-col p-6 pr-4 h-full relative z-10 overflow-hidden">
-        <div className="flex justify-between items-end mb-6">
-          <div>
-            <div className="flex items-center gap-3 mb-4">
+      {/* MAIN CHART PANEL - MOBILE OPTIMIZED */}
+      <div className="flex-none lg:flex-1 h-[55vh] lg:h-full flex flex-col p-3 lg:p-6 lg:pr-4 relative z-10 overflow-hidden">
+        
+        {/* RESPONSIVE HEADER */}
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-4 lg:mb-6 gap-3 lg:gap-0">
+          <div className="w-full md:w-auto">
+            <div className="flex items-center gap-3 mb-3 lg:mb-4">
               <div className="p-2 bg-indigo-500/10 border border-indigo-500/30 rounded-lg shadow-[0_0_15px_rgba(99,102,241,0.2)]">
                 <Terminal className="text-indigo-400" size={20} />
               </div>
-              <h1 className="text-3xl font-extrabold tracking-tighter text-white drop-shadow-md">V3 Flow<span className="text-indigo-500">Terminal</span></h1>
+              <h1 className="text-2xl lg:text-3xl font-extrabold tracking-tighter text-white drop-shadow-md">V3 Flow<span className="text-indigo-500">Terminal</span></h1>
             </div>
             
-            <div className="flex gap-2 mb-2 bg-[#09090b]/80 p-1.5 rounded-lg border border-white/5 backdrop-blur-xl w-fit shadow-2xl">
+            <div className="flex flex-wrap gap-2 mb-2 bg-[#09090b]/80 p-1.5 rounded-lg border border-white/5 backdrop-blur-xl shadow-2xl w-full md:w-fit">
               {['BTC', 'ETH', 'SOL'].map(c => (
                 <button key={c} onClick={() => setCoin(c)} className={`px-4 py-1.5 text-xs font-bold rounded transition-all ${coin === c ? 'bg-indigo-600 shadow-[0_0_15px_rgba(79,70,229,0.5)] text-white' : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'}`}>{c}</button>
               ))}
-              <div className="w-px bg-white/10 mx-1"></div>
+              <div className="w-px bg-white/10 mx-1 hidden sm:block"></div>
               {['1m', '5m', '15m', '1h', '4h'].map(t => (
                 <button key={t} onClick={() => setTimeframe(t)} className={`px-3 py-1.5 text-xs font-bold rounded transition-all ${timeframe === t ? 'bg-slate-800 text-white shadow-md border border-white/10' : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'}`}>{t}</button>
               ))}
             </div>
           </div>
           
-          <div className="text-right flex flex-col items-end">
-            <div className={`text-5xl font-mono font-black tracking-tighter transition-colors ${data[data.length-1].close >= data[data.length-1].open ? 'text-emerald-400 drop-shadow-[0_0_15px_rgba(16,185,129,0.3)]' : 'text-rose-500 drop-shadow-[0_0_15px_rgba(244,63,94,0.3)]'}`}>
+          <div className="text-left md:text-right flex flex-col items-start md:items-end w-full md:w-auto">
+            <div className={`text-4xl lg:text-5xl font-mono font-black tracking-tighter transition-colors ${data[data.length-1].close >= data[data.length-1].open ? 'text-emerald-400 drop-shadow-[0_0_15px_rgba(16,185,129,0.3)]' : 'text-rose-500 drop-shadow-[0_0_15px_rgba(244,63,94,0.3)]'}`}>
               ${livePrice.toLocaleString('en-US', {minimumFractionDigits: 2})}
             </div>
-            <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full text-[10px] font-bold tracking-widest text-emerald-400 mt-3 uppercase shadow-[0_0_10px_rgba(16,185,129,0.1)]">
+            <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full text-[10px] font-bold tracking-widest text-emerald-400 mt-2 lg:mt-3 uppercase shadow-[0_0_10px_rgba(16,185,129,0.1)]">
               <RefreshCw size={12} className={status.includes('SECURED') ? 'animate-spin' : ''} />
               {status}
             </div>
           </div>
         </div>
 
-        { }
+        {/* CHART CONTAINER */}
         <div className="flex-1 bg-[#09090b]/90 backdrop-blur-2xl rounded-2xl border border-white/5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_20px_40px_rgba(0,0,0,0.5)] relative overflow-hidden">
           {showIndicators.vpvr && vpvrData.length > 0 && (
-            <div className="absolute top-0 right-[40px] h-full w-[35%] opacity-40 pointer-events-none z-0">
+            <div className="absolute top-0 right-[35px] lg:right-[40px] h-full w-[35%] opacity-40 pointer-events-none z-0">
               {vpvrData.map((bin, i) => {
                 const totalVol = Math.max(...vpvrData.map(b => b.buyVol + b.sellVol), 1);
                 const widthPct = ((bin.buyVol + bin.sellVol) / totalVol) * 100;
@@ -432,11 +487,11 @@ export default function App() {
             <ComposedChart data={data} margin={{ top: 20, right: 10, left: 0, bottom: 20 }}>
               <defs>
                 <linearGradient id="colorVolBuy" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#10B981" stopOpacity={0.7}/>
+                  <stop offset="0%" stopColor="#10B981" stopOpacity={0.8}/>
                   <stop offset="100%" stopColor="#10B981" stopOpacity={0.0}/>
                 </linearGradient>
                 <linearGradient id="colorVolSell" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#F43F5E" stopOpacity={0.7}/>
+                  <stop offset="0%" stopColor="#F43F5E" stopOpacity={0.8}/>
                   <stop offset="100%" stopColor="#F43F5E" stopOpacity={0.0}/>
                 </linearGradient>
               </defs>
@@ -459,15 +514,15 @@ export default function App() {
               {showIndicators.sr && <ReferenceLine yAxisId="price" y={highest} stroke="#F43F5E" strokeWidth={1} strokeDasharray="5 5" strokeOpacity={0.8} ifOverflow="extendDomain" />}
               {showIndicators.sr && <ReferenceLine yAxisId="price" y={lowest} stroke="#10B981" strokeWidth={1} strokeDasharray="5 5" strokeOpacity={0.8} ifOverflow="extendDomain" />}
               
-              {showIndicators.maxPain && (
+              {showIndicators.maxPain && maxPainRenderData && (
                 <ReferenceLine 
                   yAxisId="price"
-                  y={optionsData.maxPain > highest * 1.05 ? yAxisDomain[1] * 0.98 : optionsData.maxPain} 
+                  y={maxPainRenderData.y} 
                   stroke="#fbbf24" strokeWidth={2} strokeDasharray="4 4" 
                   label={{ 
-                    position: 'insideTopLeft', 
+                    position: maxPainRenderData.position, 
                     fill: '#fbbf24', 
-                    value: optionsData.maxPain > highest * 1.05 ? `[ GAMMA WALL: $${optionsData.maxPain.toLocaleString()} ]` : `[ MAX PAIN: $${optionsData.maxPain.toLocaleString()} ]`, 
+                    value: maxPainRenderData.label, 
                     fontSize: 11, fontFamily: 'JetBrains Mono', fontWeight: 'bold' 
                   }} 
                 />
@@ -477,8 +532,8 @@ export default function App() {
         </div>
       </div>
 
-      { }
-      <div className="w-[400px] shrink-0 h-full p-6 pl-2 overflow-y-auto flex flex-col gap-4 custom-scrollbar relative z-10 pb-12">
+      {/* SIDEBAR PANEL - MOBILE SCROLLABLE */}
+      <div className="w-full lg:w-[400px] shrink-0 h-auto lg:h-full p-3 lg:p-6 lg:pl-2 overflow-y-visible lg:overflow-y-auto flex flex-col gap-4 custom-scrollbar relative z-10 pb-12">
         
         {/* ENGINE CONTROLS */}
         <div className="shrink-0 bg-[#09090b] rounded-xl border border-white/5 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_10px_30px_rgba(0,0,0,0.5)]">
@@ -497,20 +552,17 @@ export default function App() {
         {/* ALGORITHM STATUS */}
         <div className="shrink-0 bg-[#09090b] rounded-xl border border-white/5 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_10px_30px_rgba(0,0,0,0.5)]">
           <div className="flex justify-between items-end mb-4">
-            <span className="text-[11px] text-slate-300 font-black tracking-[0.2em] uppercase">Algorithmic Score</span>
-            <span className="text-2xl font-mono font-black text-white drop-shadow-md">{scoreEngine.score} <span className="text-slate-600 text-lg">/ 6</span></span>
+            <span className="text-[11px] text-slate-300 font-black tracking-[0.2em] uppercase">
+              Algorithmic Score <span className={`ml-1 ${scoreEngine.type === 'LONG' ? 'text-emerald-400' : 'text-rose-400'}`}>[{scoreEngine.type}]</span>
+            </span>
+            <span className="text-2xl font-mono font-black text-white drop-shadow-md">{scoreEngine.score} <span className="text-slate-400 text-lg">/ 6</span></span>
           </div>
           
           <div className="space-y-2">
-            {[
-              { label: 'Price Location', value: scoreEngine.location, good: scoreEngine.location.includes('Support') },
-              { label: 'DOM Imbalance', value: scoreEngine.dom, good: scoreEngine.dom.includes('Buy Wall') },
-              { label: 'Tape Absorption', value: scoreEngine.tape, good: scoreEngine.tape.includes('Absorption') },
-              { label: 'Options Bias', value: optionsData.bias, good: optionsData.bias === 'Bullish' }
-            ].map((cond, i) => (
-              <div key={i} className="flex justify-between items-center p-2 rounded bg-[#020617] border border-white/5">
+            {scoreEngine.conditions.map((cond, i) => (
+              <div key={i} className="flex justify-between items-center p-2 rounded bg-[#020617] border border-white/5 shadow-inner">
                 <span className="text-[11px] text-slate-300 font-bold tracking-wider">{cond.label}</span>
-                <div className={`px-2 py-0.5 rounded-full text-[10px] font-black tracking-widest uppercase border ${cond.good ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.15)]' : 'bg-slate-800/50 border-slate-700/50 text-slate-400'}`}>
+                <div className={`px-2 py-0.5 rounded-full text-[10px] font-black tracking-widest uppercase border ${cond.good ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.15)]' : 'bg-slate-800/50 border-slate-700/50 text-slate-500'}`}>
                   {cond.value}
                 </div>
               </div>
@@ -563,7 +615,9 @@ export default function App() {
             </div>
             {cloudState.activeTrade && (
               <div className="text-right">
-                <div className="text-[10px] text-emerald-400 font-black mb-1 tracking-[0.2em] animate-pulse drop-shadow-[0_0_5px_rgba(16,185,129,0.8)]">ACTIVE LONG</div>
+                <div className={`text-[10px] font-black mb-1 tracking-[0.2em] animate-pulse ${cloudState.activeTrade.type === 'LONG' ? 'text-emerald-400 drop-shadow-[0_0_5px_rgba(16,185,129,0.8)]' : 'text-rose-400 drop-shadow-[0_0_5px_rgba(244,63,94,0.8)]'}`}>
+                  ACTIVE {cloudState.activeTrade.type}
+                </div>
                 <div className="text-[11px] font-mono font-bold text-slate-300 border border-slate-700/50 px-1.5 py-0.5 rounded bg-slate-900/50">EP: ${cloudState.activeTrade.entry.toFixed(2)}</div>
               </div>
             )}
@@ -586,7 +640,7 @@ export default function App() {
               </div>
               <div className="max-h-[120px] overflow-y-auto space-y-2 pr-2 custom-scrollbar">
                 {cloudState.history.map((log) => (
-                  <div key={log.id} className="flex justify-between items-center text-xs bg-[#020617] p-2.5 rounded-lg border border-white/5 shadow-inner hover:border-white/10 transition-colors">
+                  <div key={log.id} className="flex justify-between items-center text-xs bg-slate-900/50 p-2.5 rounded-lg border border-white/5 hover:bg-slate-800/50 transition-colors">
                     <div className="flex flex-col gap-0.5">
                       <span className="font-extrabold text-slate-200">{log.pair}</span>
                       <span className={`text-[9px] font-bold tracking-widest uppercase ${log.result === 'SUCCESS' ? 'text-emerald-400' : 'text-rose-400'}`}>
@@ -594,11 +648,11 @@ export default function App() {
                       </span>
                     </div>
                     <div className="flex flex-col items-end text-right">
-                      <span className={`font-mono font-bold tracking-tighter text-sm drop-shadow-md ${log.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      <span className={`font-mono font-bold tracking-tighter text-sm ${log.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                         {log.pnl >= 0 ? '+' : ''}${log.pnl.toFixed(2)}
                       </span>
                       {log.entryPrice ? (
-                        <span className="text-[9px] text-slate-300 font-mono mt-1 font-semibold bg-slate-900/80 px-1.5 py-0.5 rounded border border-white/5 shadow-inner">
+                        <span className="text-[9px] text-slate-300 font-mono mt-1 font-semibold bg-slate-950/50 px-1.5 py-0.5 rounded border border-white/5 shadow-inner">
                           Entry: ${log.entryPrice.toFixed(2)} → Sell: ${log.exitPrice?.toFixed(2)}
                         </span>
                       ) : null}

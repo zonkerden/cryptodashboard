@@ -1,16 +1,16 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { ComposedChart, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Bar, Line, Cell } from 'recharts';
-import { Activity, Server, Target, RefreshCw, Database } from 'lucide-react';
+import { Activity, Server, Target, RefreshCw, Database, Terminal, Cpu } from 'lucide-react';
 
 const BINANCE_REST = 'https://data-api.binance.vision/api/v3';
 const MOCK_APP_ID = "v3-flow-terminal-master"; 
 
 const CandlestickShape = (props) => {
   const { x, y, width, height, payload } = props;
-  if (!payload || typeof payload.open === 'undefined') return null;
+  if (!payload || typeof payload.open === 'undefined' || typeof payload.high === 'undefined') return null;
   
   const isGreen = payload.close >= payload.open;
-  const color = isGreen ? '#10B981' : '#EF4444';
+  const color = isGreen ? '#10B981' : '#F43F5E';
   
   const range = payload.high - payload.low;
   if (range === 0) return null;
@@ -26,8 +26,8 @@ const CandlestickShape = (props) => {
   
   return (
     <g>
-      <line x1={x + width / 2} y1={y} x2={x + width / 2} y2={y + height} stroke={color} strokeWidth={1.5} />
-      <rect x={x + width * 0.15} y={boxTop} width={width * 0.7} height={boxHeight} fill={color} />
+      <line x1={x + width / 2} y1={y} x2={x + width / 2} y2={y + height} stroke={color} strokeWidth={1.5} opacity={0.8} />
+      <rect x={x + width * 0.15} y={boxTop} width={width * 0.7} height={boxHeight} fill={color} stroke={color} strokeWidth={1} rx={1} />
     </g>
   );
 };
@@ -40,7 +40,7 @@ export default function App() {
   const [data, setData] = useState([]);
   const [livePrice, setLivePrice] = useState(0);
   const [vpvrData, setVpvrData] = useState([]);
-  const [optionsData, setOptionsData] = useState({ pcr: 0.58, maxPain: 0, bias: 'Neutral' });
+  const [optionsData, setOptionsData] = useState({ pcr: 0.58, maxPain: 0, bias: 'Neutral', callVol: 100, putVol: 58 });
   
   const [showIndicators, setShowIndicators] = useState({
     vpvr: true, vwap: true, sr: true, maxPain: true
@@ -72,10 +72,34 @@ export default function App() {
       const style = document.createElement('style');
       style.id = 'premium-css';
       style.innerHTML = `
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800&family=Inter:wght@400;600;800&display=swap');
+        
+        body { font-family: 'Inter', sans-serif; background-color: #020617; }
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+        
+        /* Cyberpunk Scrollbar */
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.2); border-radius: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(99, 102, 241, 0.5); border-radius: 4px; box-shadow: 0 0 10px rgba(99, 102, 241, 0.5); }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(99, 102, 241, 0.9); }
+        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(2, 6, 23, 0.5); border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(99, 102, 241, 0.4); border-radius: 4px; box-shadow: 0 0 10px rgba(99, 102, 241, 0.5); }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(99, 102, 241, 0.8); }
+
+        /* CRT Scanline Overlay - Opacity reduced for readability */
+        .scanlines {
+          background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0) 50%, rgba(0,0,0,0.1) 50%, rgba(0,0,0,0.1));
+          background-size: 100% 4px;
+          position: absolute;
+          top: 0; left: 0; right: 0; bottom: 0;
+          pointer-events: none;
+          z-index: 50;
+          opacity: 0.15; 
+        }
+
+        /* Tech Grid Background */
+        .tech-grid {
+          background-image: linear-gradient(to right, rgba(255,255,255,0.03) 1px, transparent 1px),
+                            linear-gradient(to bottom, rgba(255,255,255,0.03) 1px, transparent 1px);
+          background-size: 30px 30px;
+        }
       `;
       document.head.appendChild(style);
     }
@@ -129,9 +153,15 @@ export default function App() {
         });
 
         const bias = pcr < 0.7 ? 'Bullish' : pcr > 1 ? 'Bearish' : 'Neutral';
-        setOptionsData({ pcr: pcr.toFixed(2), maxPain: maxPain || (coin === 'BTC' ? 95000 : coin === 'ETH' ? 3500 : 150), bias });
+        setOptionsData({ 
+          pcr: pcr.toFixed(2), 
+          maxPain: maxPain || (coin === 'BTC' ? 95000 : coin === 'ETH' ? 3500 : 150), 
+          bias,
+          callVol: callVol || 100,
+          putVol: putVol || 58
+        });
       } catch (e) {
-        setOptionsData({ pcr: 0.58, maxPain: coin === 'BTC' ? 95000 : coin === 'ETH' ? 3500 : 150, bias: 'Bullish' });
+        setOptionsData({ pcr: 0.58, maxPain: coin === 'BTC' ? 95000 : coin === 'ETH' ? 3500 : 150, bias: 'Bullish', callVol: 100, putVol: 58 });
       }
     };
     fetchDeribit();
@@ -258,9 +288,9 @@ export default function App() {
 
     return {
       score,
-      location: atSupport ? 'At Support' : 'Mid-Range',
-      dom: atSupport ? 'Buy Wall Detected' : 'Neutral',
-      tape: abs ? 'Buyer Absorption' : 'None'
+      location: atSupport ? 'Support Detected' : 'Mid-Range',
+      dom: atSupport ? 'Buy Wall Present' : 'Neutral DOM',
+      tape: abs ? 'Buyer Absorption' : 'Standard Flow'
     };
   }, [livePrice, lowest, optionsData, data.length]);
 
@@ -316,60 +346,71 @@ export default function App() {
 
   if (data.length === 0) {
     return (
-      <div className="h-screen w-full bg-[#050810] flex flex-col items-center justify-center font-mono relative overflow-hidden">
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-indigo-900/20 via-[#050810] to-[#050810]" />
+      <div className="h-screen w-full bg-[#020617] flex flex-col items-center justify-center font-mono relative overflow-hidden tech-grid">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-indigo-900/10 via-[#020617] to-[#020617]" />
         
-        <Database className="text-indigo-500 animate-pulse mb-6 drop-shadow-[0_0_15px_rgba(99,102,241,0.8)] z-10" size={56} />
-        <div className="text-indigo-400 font-extrabold tracking-widest text-sm uppercase flex items-center gap-3 z-10">
-          <RefreshCw size={16} className="animate-spin" />
-          Synchronizing Neural Link...
-        </div>
-        
-        <div className="w-64 h-1.5 bg-slate-900 rounded-full mt-8 overflow-hidden z-10 border border-white/5 shadow-[0_0_10px_rgba(99,102,241,0.2)]">
-          <div className="h-full bg-indigo-500 w-1/2 animate-[ping_1.5s_ease-in-out_infinite] rounded-full shadow-[0_0_10px_rgba(99,102,241,0.8)]"></div>
+        <div className="relative z-10 flex flex-col items-center">
+          <div className="w-24 h-24 mb-8 relative flex items-center justify-center">
+            <div className="absolute inset-0 border-t-2 border-indigo-500 rounded-full animate-spin"></div>
+            <div className="absolute inset-2 border-r-2 border-cyan-400 rounded-full animate-[spin_2s_reverse_infinite]"></div>
+            <div className="absolute inset-4 border-b-2 border-purple-500 rounded-full animate-spin"></div>
+            <Cpu className="text-indigo-400 animate-pulse" size={24} />
+          </div>
+          
+          <div className="text-cyan-400 font-extrabold tracking-[0.3em] text-xs uppercase flex items-center gap-3 drop-shadow-[0_0_8px_rgba(34,211,238,0.5)]">
+            BOOTING NEURAL TERMINAL V3...
+          </div>
         </div>
       </div>
     );
   }
 
+  const totalOptionsVol = optionsData.callVol + optionsData.putVol;
+  const callPct = (optionsData.callVol / totalOptionsVol) * 100;
+  const putPct = (optionsData.putVol / totalOptionsVol) * 100;
+
   return (
-    <div className="h-screen w-full bg-[#050810] text-white font-sans overflow-hidden flex relative selection:bg-indigo-500/30">
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-900/20 via-[#050810] to-[#050810] pointer-events-none -z-10" />
+    <div className="h-screen w-full bg-[#020617] text-slate-200 font-sans overflow-hidden flex relative selection:bg-indigo-500/30 tech-grid">
+      <div className="scanlines"></div>
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-900/10 via-[#020617]/80 to-[#020617] pointer-events-none -z-10" />
       
       {/* MAIN CHART PANEL */}
       <div className="flex-1 flex flex-col p-6 pr-4 h-full relative z-10 overflow-hidden">
         <div className="flex justify-between items-end mb-6">
           <div>
             <div className="flex items-center gap-3 mb-4">
-              <Database className="text-indigo-400 drop-shadow-[0_0_8px_rgba(99,102,241,0.8)]" size={28} />
-              <h1 className="text-3xl font-extrabold tracking-tighter">V3 Flow<span className="text-indigo-400">Terminal</span></h1>
+              <div className="p-2 bg-indigo-500/10 border border-indigo-500/30 rounded-lg shadow-[0_0_15px_rgba(99,102,241,0.2)]">
+                <Terminal className="text-indigo-400" size={20} />
+              </div>
+              <h1 className="text-3xl font-extrabold tracking-tighter text-white drop-shadow-md">V3 Flow<span className="text-indigo-500">Terminal</span></h1>
             </div>
             
-            <div className="flex gap-3 mb-2 bg-[#0f172a]/40 p-1.5 rounded-lg border border-white/5 backdrop-blur-md w-fit shadow-lg">
+            <div className="flex gap-2 mb-2 bg-[#09090b]/80 p-1.5 rounded-lg border border-white/5 backdrop-blur-xl w-fit shadow-2xl">
               {['BTC', 'ETH', 'SOL'].map(c => (
-                <button key={c} onClick={() => setCoin(c)} className={`px-4 py-1.5 text-xs font-bold rounded transition-all ${coin === c ? 'bg-indigo-600 shadow-[0_0_15px_rgba(79,70,229,0.5)] text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>{c}</button>
+                <button key={c} onClick={() => setCoin(c)} className={`px-4 py-1.5 text-xs font-bold rounded transition-all ${coin === c ? 'bg-indigo-600 shadow-[0_0_15px_rgba(79,70,229,0.5)] text-white' : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'}`}>{c}</button>
               ))}
               <div className="w-px bg-white/10 mx-1"></div>
               {['1m', '5m', '15m', '1h', '4h'].map(t => (
-                <button key={t} onClick={() => setTimeframe(t)} className={`px-4 py-1.5 text-xs font-bold rounded transition-all ${timeframe === t ? 'bg-slate-700 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>{t}</button>
+                <button key={t} onClick={() => setTimeframe(t)} className={`px-3 py-1.5 text-xs font-bold rounded transition-all ${timeframe === t ? 'bg-slate-800 text-white shadow-md border border-white/10' : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'}`}>{t}</button>
               ))}
             </div>
           </div>
           
-          <div className="text-right">
-            <div className={`text-5xl font-mono font-extrabold tracking-tighter transition-colors ${data[data.length-1].close >= data[data.length-1].open ? 'text-emerald-400 drop-shadow-[0_0_12px_rgba(16,185,129,0.4)]' : 'text-rose-500 drop-shadow-[0_0_12px_rgba(244,63,94,0.4)]'}`}>
+          <div className="text-right flex flex-col items-end">
+            <div className={`text-5xl font-mono font-black tracking-tighter transition-colors ${data[data.length-1].close >= data[data.length-1].open ? 'text-emerald-400 drop-shadow-[0_0_15px_rgba(16,185,129,0.3)]' : 'text-rose-500 drop-shadow-[0_0_15px_rgba(244,63,94,0.3)]'}`}>
               ${livePrice.toLocaleString('en-US', {minimumFractionDigits: 2})}
             </div>
-            <div className="flex items-center gap-2 justify-end text-[11px] font-bold tracking-widest text-emerald-400 mt-2 uppercase drop-shadow-[0_0_5px_rgba(16,185,129,0.6)]">
-              <RefreshCw size={14} className={status.includes('SECURED') ? 'animate-spin' : ''} />
+            <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full text-[10px] font-bold tracking-widest text-emerald-400 mt-3 uppercase shadow-[0_0_10px_rgba(16,185,129,0.1)]">
+              <RefreshCw size={12} className={status.includes('SECURED') ? 'animate-spin' : ''} />
               {status}
             </div>
           </div>
         </div>
 
-        <div className="flex-1 bg-[#0f172a]/60 backdrop-blur-xl rounded-2xl border border-white/5 shadow-2xl relative overflow-hidden">
+        { }
+        <div className="flex-1 bg-[#09090b]/90 backdrop-blur-2xl rounded-2xl border border-white/5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_20px_40px_rgba(0,0,0,0.5)] relative overflow-hidden">
           {showIndicators.vpvr && vpvrData.length > 0 && (
-            <div className="absolute top-0 right-[40px] h-full w-[40%] opacity-40 pointer-events-none z-0">
+            <div className="absolute top-0 right-[40px] h-full w-[35%] opacity-40 pointer-events-none z-0">
               {vpvrData.map((bin, i) => {
                 const totalVol = Math.max(...vpvrData.map(b => b.buyVol + b.sellVol), 1);
                 const widthPct = ((bin.buyVol + bin.sellVol) / totalVol) * 100;
@@ -380,7 +421,7 @@ export default function App() {
                 return (
                   <div key={i} className="absolute right-0 flex h-[6px] justify-end items-center -translate-y-1/2" style={{ top: `${topPct}%`, width: `${widthPct}%` }}>
                     <div className="h-full bg-[#10B981]" style={{ width: `${buyPct}%` }} />
-                    <div className="h-full bg-[#EF4444]" style={{ width: `${100 - buyPct}%` }} />
+                    <div className="h-full bg-[#F43F5E]" style={{ width: `${100 - buyPct}%` }} />
                   </div>
                 );
               })}
@@ -391,20 +432,20 @@ export default function App() {
             <ComposedChart data={data} margin={{ top: 20, right: 10, left: 0, bottom: 20 }}>
               <defs>
                 <linearGradient id="colorVolBuy" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#10B981" stopOpacity={0.5}/>
+                  <stop offset="0%" stopColor="#10B981" stopOpacity={0.7}/>
                   <stop offset="100%" stopColor="#10B981" stopOpacity={0.0}/>
                 </linearGradient>
                 <linearGradient id="colorVolSell" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#EF4444" stopOpacity={0.5}/>
-                  <stop offset="100%" stopColor="#EF4444" stopOpacity={0.0}/>
+                  <stop offset="0%" stopColor="#F43F5E" stopOpacity={0.7}/>
+                  <stop offset="100%" stopColor="#F43F5E" stopOpacity={0.0}/>
                 </linearGradient>
               </defs>
 
               <XAxis dataKey="timestamp" hide />
-              <YAxis yAxisId="price" domain={yAxisDomain} allowDataOverflow={true} orientation="right" tick={{fill: '#64748b', fontSize: 11, fontWeight: 600}} axisLine={false} tickLine={false} />
+              <YAxis yAxisId="price" domain={yAxisDomain} allowDataOverflow={true} orientation="right" tick={{fill: '#94a3b8', fontSize: 11, fontFamily: 'JetBrains Mono'}} axisLine={false} tickLine={false} />
               <YAxis yAxisId="vol" domain={[0, maxVol * 4]} hide />
               
-              <Tooltip cursor={{stroke: '#334155'}} contentStyle={{backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#fff', borderRadius: '8px', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.5)'}} />
+              <Tooltip cursor={{stroke: '#334155', strokeWidth: 1, strokeDasharray: '4 4'}} contentStyle={{backgroundColor: '#09090b', borderColor: '#1e293b', color: '#f8fafc', borderRadius: '8px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)', fontFamily: 'JetBrains Mono', fontSize: '12px'}} />
               
               <Bar yAxisId="vol" dataKey="vol" radius={[4, 4, 0, 0]}>
                 {data.map((entry, index) => (
@@ -414,9 +455,9 @@ export default function App() {
               
               <Bar yAxisId="price" dataKey="candleRange" shape={(props) => <CandlestickShape {...props} />} />
               
-              {showIndicators.vwap && <Line yAxisId="price" type="monotone" dataKey="vwap" stroke="#a855f7" strokeWidth={2} strokeDasharray="4 4" dot={false} />}
-              {showIndicators.sr && <ReferenceLine yAxisId="price" y={highest} stroke="#f43f5e" strokeWidth={1} strokeDasharray="5 5" strokeOpacity={0.6} ifOverflow="extendDomain" />}
-              {showIndicators.sr && <ReferenceLine yAxisId="price" y={lowest} stroke="#10b981" strokeWidth={1} strokeDasharray="5 5" strokeOpacity={0.6} ifOverflow="extendDomain" />}
+              {showIndicators.vwap && <Line yAxisId="price" type="monotone" dataKey="vwap" stroke="#a855f7" strokeWidth={2} strokeDasharray="3 3" dot={false} style={{filter: 'drop-shadow(0px 0px 4px rgba(168,85,247,0.5))'}}/>}
+              {showIndicators.sr && <ReferenceLine yAxisId="price" y={highest} stroke="#F43F5E" strokeWidth={1} strokeDasharray="5 5" strokeOpacity={0.8} ifOverflow="extendDomain" />}
+              {showIndicators.sr && <ReferenceLine yAxisId="price" y={lowest} stroke="#10B981" strokeWidth={1} strokeDasharray="5 5" strokeOpacity={0.8} ifOverflow="extendDomain" />}
               
               {showIndicators.maxPain && (
                 <ReferenceLine 
@@ -426,8 +467,8 @@ export default function App() {
                   label={{ 
                     position: 'insideTopLeft', 
                     fill: '#fbbf24', 
-                    value: optionsData.maxPain > highest * 1.05 ? `GAMMA WALL (OFF-SCREEN: $${optionsData.maxPain.toLocaleString()})` : `MAX PAIN: $${optionsData.maxPain.toLocaleString()}`, 
-                    fontSize: 10, fontWeight: 'bold' 
+                    value: optionsData.maxPain > highest * 1.05 ? `[ GAMMA WALL: $${optionsData.maxPain.toLocaleString()} ]` : `[ MAX PAIN: $${optionsData.maxPain.toLocaleString()} ]`, 
+                    fontSize: 11, fontFamily: 'JetBrains Mono', fontWeight: 'bold' 
                   }} 
                 />
               )}
@@ -436,121 +477,116 @@ export default function App() {
         </div>
       </div>
 
-      {}
-      <div className="w-[380px] shrink-0 h-full p-6 pl-2 overflow-y-auto flex flex-col gap-5 custom-scrollbar relative z-10 pb-12">
-        <div className="shrink-0 bg-[#0f172a]/60 backdrop-blur-xl rounded-2xl border border-white/5 p-5 shadow-xl">
-          <h2 className="text-[10px] font-extrabold text-slate-500 mb-4 flex items-center gap-2 tracking-widest uppercase"><Target size={14} className="text-indigo-400"/> Order Flow Engine</h2>
+      { }
+      <div className="w-[400px] shrink-0 h-full p-6 pl-2 overflow-y-auto flex flex-col gap-4 custom-scrollbar relative z-10 pb-12">
+        
+        {/* ENGINE CONTROLS */}
+        <div className="shrink-0 bg-[#09090b] rounded-xl border border-white/5 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_10px_30px_rgba(0,0,0,0.5)]">
+          <h2 className="text-[11px] font-black text-slate-300 mb-4 flex items-center gap-2 tracking-[0.2em] uppercase drop-shadow-sm">
+            <Target size={14} className="text-indigo-400"/> Order Flow Engine
+          </h2>
           <div className="flex flex-wrap gap-2">
             {Object.keys(showIndicators).map(key => (
-              <button key={key} onClick={() => setShowIndicators(prev => ({...prev, [key]: !prev[key]}))} className={`px-3 py-1.5 text-[10px] font-extrabold tracking-widest uppercase rounded transition-all ${showIndicators[key] ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 shadow-[0_0_10px_rgba(79,70,229,0.2)]' : 'bg-slate-800/50 text-slate-500 border border-white/5 hover:bg-slate-800'}`}>
+              <button key={key} onClick={() => setShowIndicators(prev => ({...prev, [key]: !prev[key]}))} className={`px-3 py-1.5 text-[10px] font-black tracking-[0.15em] uppercase rounded transition-all ${showIndicators[key] ? 'bg-indigo-500/15 text-indigo-400 border border-indigo-500/40 shadow-[0_0_15px_rgba(79,70,229,0.15)]' : 'bg-[#020617] text-slate-400 border border-white/5 hover:border-white/10 hover:text-slate-200'}`}>
                 {key}
               </button>
             ))}
           </div>
         </div>
 
-        <div className="shrink-0 bg-[#0f172a]/60 backdrop-blur-xl rounded-2xl border border-white/5 p-5 shadow-xl">
+        {/* ALGORITHM STATUS */}
+        <div className="shrink-0 bg-[#09090b] rounded-xl border border-white/5 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_10px_30px_rgba(0,0,0,0.5)]">
           <div className="flex justify-between items-end mb-4">
-            <span className="text-[9px] text-slate-500 font-bold tracking-widest uppercase">Engine Status</span>
-            <span className="text-[9px] text-slate-500 font-bold tracking-widest uppercase">Conditions</span>
+            <span className="text-[11px] text-slate-300 font-black tracking-[0.2em] uppercase">Algorithmic Score</span>
+            <span className="text-2xl font-mono font-black text-white drop-shadow-md">{scoreEngine.score} <span className="text-slate-600 text-lg">/ 6</span></span>
           </div>
-          <div className="flex justify-between items-center mb-6">
-            <span className={`text-xl font-black tracking-tight ${scoreEngine.score >= 4 ? 'text-emerald-400 drop-shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'text-slate-400'}`}>
-              {scoreEngine.score >= 5 ? 'LONG SETUP' : 'WAITING'}
-            </span>
-            <span className="text-2xl font-mono font-bold text-white drop-shadow-md">{scoreEngine.score} <span className="text-slate-600 text-lg">/ 6</span></span>
-          </div>
-
+          
           <div className="space-y-2">
-            <div className="flex justify-between items-center text-xs p-2.5 bg-slate-900/50 rounded-lg border border-white/5">
-              <span className="text-slate-400 font-medium">Price Location:</span>
-              <span className="font-bold text-slate-200">{scoreEngine.location}</span>
-            </div>
-            <div className="flex justify-between items-center text-xs p-2.5 bg-slate-900/50 rounded-lg border border-white/5">
-              <span className="text-slate-400 font-medium">DOM Imbalance:</span>
-              <span className="font-bold text-emerald-400">{scoreEngine.dom}</span>
-            </div>
-            <div className="flex justify-between items-center text-xs p-2.5 bg-slate-900/50 rounded-lg border border-white/5">
-              <span className="text-slate-400 font-medium">Tape Absorption:</span>
-              <span className="font-bold text-slate-200">{scoreEngine.tape}</span>
-            </div>
-            <div className="flex justify-between items-center text-xs p-2.5 bg-slate-900/50 rounded-lg border border-white/5">
-              <span className="text-slate-400 font-medium">Options Bias:</span>
-              <span className="font-bold text-emerald-400">{optionsData.bias}</span>
-            </div>
+            {[
+              { label: 'Price Location', value: scoreEngine.location, good: scoreEngine.location.includes('Support') },
+              { label: 'DOM Imbalance', value: scoreEngine.dom, good: scoreEngine.dom.includes('Buy Wall') },
+              { label: 'Tape Absorption', value: scoreEngine.tape, good: scoreEngine.tape.includes('Absorption') },
+              { label: 'Options Bias', value: optionsData.bias, good: optionsData.bias === 'Bullish' }
+            ].map((cond, i) => (
+              <div key={i} className="flex justify-between items-center p-2 rounded bg-[#020617] border border-white/5">
+                <span className="text-[11px] text-slate-300 font-bold tracking-wider">{cond.label}</span>
+                <div className={`px-2 py-0.5 rounded-full text-[10px] font-black tracking-widest uppercase border ${cond.good ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.15)]' : 'bg-slate-800/50 border-slate-700/50 text-slate-400'}`}>
+                  {cond.value}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
         
-        <div className="shrink-0 bg-[#0f172a]/60 backdrop-blur-xl rounded-2xl border border-white/5 p-5 shadow-xl">
-          <h2 className="text-[10px] font-extrabold text-slate-500 mb-4 flex items-center gap-2 tracking-widest uppercase"><Activity size={14} className="text-purple-400"/> Deribit Options Flow</h2>
-          <div className="flex justify-between mb-2">
-            <span className="text-[9px] text-slate-500 font-bold tracking-widest uppercase">Put/Call Ratio (PCR)</span>
-            <span className="text-[9px] text-slate-500 font-bold tracking-widest uppercase">Max Pain Magnet</span>
+        {/* OPTIONS FLOW WITH VISUAL BAR */}
+        <div className="shrink-0 bg-[#09090b] rounded-xl border border-white/5 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_10px_30px_rgba(0,0,0,0.5)]">
+          <h2 className="text-[11px] font-black text-slate-300 mb-4 flex items-center gap-2 tracking-[0.2em] uppercase drop-shadow-sm">
+            <Activity size={14} className="text-amber-400"/> Institutional Options
+          </h2>
+          
+          <div className="mb-5">
+            <div className="flex justify-between items-end mb-2">
+              <span className="text-[10px] text-slate-300 font-bold tracking-[0.1em] uppercase">Put/Call Ratio</span>
+              <span className={`text-xl font-mono font-black tracking-tighter ${optionsData.pcr < 0.7 ? 'text-emerald-400 drop-shadow-[0_0_8px_rgba(16,185,129,0.3)]' : 'text-rose-500 drop-shadow-[0_0_8px_rgba(244,63,94,0.3)]'}`}>{optionsData.pcr}</span>
+            </div>
+            {/* PROGRESS BAR VISUALIZATION */}
+            <div className="w-full h-2 bg-[#020617] rounded-full overflow-hidden flex shadow-inner border border-white/5">
+              <div className="h-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.6)] transition-all duration-1000" style={{ width: `${callPct}%` }}></div>
+              <div className="h-full bg-rose-500 shadow-[0_0_10px_rgba(244,63,94,0.6)] transition-all duration-1000" style={{ width: `${putPct}%` }}></div>
+            </div>
+            <div className="flex justify-between text-[9px] text-slate-400 font-bold tracking-widest uppercase mt-1.5">
+              <span>Calls ({Math.round(callPct)}%)</span>
+              <span>Puts ({Math.round(putPct)}%)</span>
+            </div>
           </div>
-          <div className="flex justify-between items-end mb-2">
-            <span className={`text-2xl font-black tracking-tighter ${optionsData.pcr < 0.7 ? 'text-emerald-400 drop-shadow-[0_0_8px_rgba(16,185,129,0.4)]' : 'text-rose-500 drop-shadow-[0_0_8px_rgba(244,63,94,0.4)]'}`}>{optionsData.pcr}</span>
-            <span className="text-xl font-mono font-bold text-yellow-500 drop-shadow-[0_0_8px_rgba(234,179,8,0.4)]">${optionsData.maxPain.toLocaleString()}</span>
-          </div>
-          <div className="flex justify-between text-[8px] text-slate-600 font-bold tracking-widest uppercase">
-            <span>Extreme Greed (PCR {'<'} 0.6)</span>
-            <span>Extreme Fear (PCR {'>'} 1.2)</span>
+
+          <div className="flex justify-between items-center p-3 rounded-lg bg-[#020617] border border-amber-500/20 shadow-[inset_0_0_10px_rgba(245,158,11,0.05)]">
+            <span className="text-[11px] text-amber-500/80 font-bold tracking-widest uppercase">Max Pain Strike</span>
+            <span className="text-lg font-mono font-black text-amber-400 drop-shadow-[0_0_8px_rgba(251,191,36,0.3)]">
+              ${optionsData.maxPain.toLocaleString()}
+            </span>
           </div>
         </div>
 
-        <div className="shrink-0 bg-[#0f172a]/60 backdrop-blur-xl rounded-2xl border border-white/5 p-5 shadow-xl">
-          <h2 className="text-[10px] font-extrabold text-slate-500 mb-4 flex items-center gap-2 tracking-widest uppercase"><Activity size={14} className="text-cyan-400"/> Whale CVD {'>'} $5K</h2>
-          <div className="grid grid-cols-2 gap-3 mb-1">
-            <div className="bg-slate-900/50 p-4 rounded-xl border border-white/5 flex flex-col justify-center items-center">
-              <div className="text-[9px] text-slate-500 mb-2 font-bold tracking-widest uppercase">Session Tally</div>
-              <div className={`text-lg font-mono font-bold tracking-tighter ${volumeRef.current.sessionCVD >= 0 ? 'text-emerald-400 drop-shadow-[0_0_8px_rgba(16,185,129,0.4)]' : 'text-rose-500 drop-shadow-[0_0_8px_rgba(244,63,94,0.4)]'}`}>
-                {volumeRef.current.sessionCVD > 0 ? '+' : ''}${(volumeRef.current.sessionCVD / 1000).toFixed(1)}k
-              </div>
-            </div>
-            <div className="bg-slate-900/50 p-4 rounded-xl border border-white/5 flex flex-col justify-center items-center">
-              <div className="text-[9px] text-slate-500 mb-2 font-bold tracking-widest uppercase">Instant Velocity</div>
-              <div className={`text-lg font-mono font-bold tracking-tighter ${volumeRef.current.instantDelta >= 0 ? 'text-emerald-400 drop-shadow-[0_0_8px_rgba(16,185,129,0.4)]' : 'text-rose-500 drop-shadow-[0_0_8px_rgba(244,63,94,0.4)]'}`}>
-                {volumeRef.current.instantDelta > 0 ? '+' : ''}${(volumeRef.current.instantDelta / 1000).toFixed(1)}k
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="shrink-0 min-h-[350px] bg-gradient-to-b from-[#0f172a]/80 to-[#020617]/90 backdrop-blur-xl rounded-2xl border border-indigo-500/20 p-5 shadow-2xl flex flex-col relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-indigo-500"></div>
+        {/* CLOUD AUTO TRADER */}
+        <div className="shrink-0 min-h-[350px] bg-[#09090b] rounded-xl border border-indigo-500/30 p-5 shadow-[0_0_30px_rgba(79,70,229,0.1),inset_0_1px_0_rgba(255,255,255,0.05)] flex flex-col relative overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-cyan-400 via-indigo-500 to-purple-500 shadow-[0_0_10px_rgba(99,102,241,0.8)]"></div>
           
-          <h2 className="text-[10px] font-extrabold text-slate-400 mb-4 flex items-center gap-2 tracking-widest uppercase"><Server size={14} className="text-indigo-400"/> Cloud Auto-Trader</h2>
+          <h2 className="text-[11px] font-black text-slate-300 mb-4 flex items-center gap-2 tracking-[0.2em] uppercase drop-shadow-sm">
+            <Server size={14} className="text-indigo-400"/> Cloud Auto-Trader
+          </h2>
           
-          <div className="flex justify-between items-end mb-5 bg-slate-950/50 p-4 rounded-xl border border-white/5 shadow-inner">
+          <div className="flex justify-between items-end mb-5 bg-[#020617] p-4 rounded-lg border border-white/5 shadow-inner">
             <div>
-              <div className="text-[9px] text-slate-500 mb-1 font-bold tracking-widest uppercase">Portfolio Balance</div>
-              <div className="text-2xl font-mono font-extrabold tracking-tighter text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.3)]">${cloudState.balance.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
+              <div className="text-[10px] text-slate-300 mb-1 font-bold tracking-[0.2em] uppercase">Portfolio Balance</div>
+              <div className="text-3xl font-mono font-black tracking-tighter text-white drop-shadow-[0_0_10px_rgba(255,255,255,0.2)]">${cloudState.balance.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
             </div>
             {cloudState.activeTrade && (
               <div className="text-right">
-                <div className="text-[9px] text-emerald-400 font-bold mb-1 tracking-widest animate-pulse drop-shadow-[0_0_5px_rgba(16,185,129,0.8)]">ACTIVE LONG</div>
-                <div className="text-xs font-mono font-bold text-slate-300">EP: ${cloudState.activeTrade.entry.toFixed(2)}</div>
+                <div className="text-[10px] text-emerald-400 font-black mb-1 tracking-[0.2em] animate-pulse drop-shadow-[0_0_5px_rgba(16,185,129,0.8)]">ACTIVE LONG</div>
+                <div className="text-[11px] font-mono font-bold text-slate-300 border border-slate-700/50 px-1.5 py-0.5 rounded bg-slate-900/50">EP: ${cloudState.activeTrade.entry.toFixed(2)}</div>
               </div>
             )}
           </div>
 
           <button 
             onClick={() => saveToCloud({...cloudState, isRunning: !cloudState.isRunning})}
-            className={`w-full py-3.5 rounded-xl font-extrabold text-xs tracking-widest uppercase transition-all shadow-lg ${cloudState.isRunning ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30 hover:bg-rose-500/20 shadow-rose-500/10' : 'bg-indigo-600 text-white hover:bg-indigo-500 border border-indigo-400/50 shadow-[0_0_15px_rgba(79,70,229,0.4)]'}`}
+            className={`w-full py-4 rounded-lg font-black text-[11px] tracking-[0.3em] uppercase transition-all shadow-lg border ${cloudState.isRunning ? 'bg-[#020617] text-rose-500 border-rose-500/40 hover:border-rose-500/70 hover:bg-rose-950/30 shadow-[0_0_15px_rgba(244,63,94,0.15)]' : 'bg-indigo-600 text-white hover:bg-indigo-500 border-indigo-400/50 shadow-[0_0_20px_rgba(79,70,229,0.3)] hover:shadow-[0_0_30px_rgba(79,70,229,0.5)]'}`}
           >
-            {cloudState.isRunning ? '■ Halt Operations' : '▶ Activate Paper Bot'}
+            {cloudState.isRunning ? '■ HALT ALGORITHM' : '▶ DEPLOY PAPER BOT'}
           </button>
 
           {cloudState.history && cloudState.history.length > 0 && (
-            <div className="mt-5 pt-5 border-t border-white/5 flex-1">
-              <div className="text-[9px] text-slate-500 mb-3 font-bold tracking-widest uppercase flex items-center justify-between">
-                <span>Trading Ledger</span>
-                <span className="bg-white/5 px-2 py-0.5 rounded text-slate-300 border border-white/5">
+            <div className="mt-5 pt-5 border-t border-white/5 flex-1 flex flex-col">
+              <div className="text-[10px] text-slate-300 mb-3 font-black tracking-[0.2em] uppercase flex items-center justify-between">
+                <span>Execution Ledger</span>
+                <span className="bg-[#020617] px-2 py-0.5 rounded text-slate-300 border border-white/5 shadow-inner">
                   {cloudState.history.filter(t => t.result === 'SUCCESS').length}W - {cloudState.history.filter(t => t.result === 'FAIL').length}L
                 </span>
               </div>
               <div className="max-h-[120px] overflow-y-auto space-y-2 pr-2 custom-scrollbar">
                 {cloudState.history.map((log) => (
-                  <div key={log.id} className="flex justify-between items-center text-xs bg-slate-900/50 p-2.5 rounded-lg border border-white/5 hover:bg-slate-800/50 transition-colors">
+                  <div key={log.id} className="flex justify-between items-center text-xs bg-[#020617] p-2.5 rounded-lg border border-white/5 shadow-inner hover:border-white/10 transition-colors">
                     <div className="flex flex-col gap-0.5">
                       <span className="font-extrabold text-slate-200">{log.pair}</span>
                       <span className={`text-[9px] font-bold tracking-widest uppercase ${log.result === 'SUCCESS' ? 'text-emerald-400' : 'text-rose-400'}`}>
@@ -558,11 +594,11 @@ export default function App() {
                       </span>
                     </div>
                     <div className="flex flex-col items-end text-right">
-                      <span className={`font-mono font-bold tracking-tighter text-sm ${log.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      <span className={`font-mono font-bold tracking-tighter text-sm drop-shadow-md ${log.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                         {log.pnl >= 0 ? '+' : ''}${log.pnl.toFixed(2)}
                       </span>
                       {log.entryPrice ? (
-                        <span className="text-[9px] text-slate-300 font-mono mt-1 font-semibold bg-slate-950/50 px-1.5 py-0.5 rounded border border-white/5 shadow-inner">
+                        <span className="text-[9px] text-slate-300 font-mono mt-1 font-semibold bg-slate-900/80 px-1.5 py-0.5 rounded border border-white/5 shadow-inner">
                           Entry: ${log.entryPrice.toFixed(2)} → Sell: ${log.exitPrice?.toFixed(2)}
                         </span>
                       ) : null}
@@ -572,13 +608,7 @@ export default function App() {
               </div>
             </div>
           )}
-
-          <div className="mt-5 pt-4 border-t border-white/5 flex justify-between text-[9px] text-slate-600 font-bold tracking-widest uppercase">
-            <span className="flex items-center gap-1.5"><div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_5px_rgba(16,185,129,0.8)]"></div> Local Sync Active</span>
-            <span>ID: {MOCK_APP_ID.split('-')[0]}</span>
-          </div>
         </div>
-
       </div>
     </div>
   );

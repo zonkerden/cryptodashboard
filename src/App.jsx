@@ -2,11 +2,9 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { ComposedChart, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Bar, Line, Cell } from 'recharts';
 import { Activity, Server, Target, RefreshCw, Database } from 'lucide-react';
 
-// --- ENGINE CONFIGURATION ---
 const BINANCE_REST = 'https://data-api.binance.vision/api/v3';
 const MOCK_APP_ID = "v3-flow-terminal-master"; 
 
-// --- CRASH-PROOF CANDLESTICK ALGORITHM ---
 const CandlestickShape = (props) => {
   const { x, y, width, height, payload } = props;
   if (!payload || typeof payload.open === 'undefined') return null;
@@ -14,7 +12,6 @@ const CandlestickShape = (props) => {
   const isGreen = payload.close >= payload.open;
   const color = isGreen ? '#10B981' : '#EF4444';
   
-  // Calculate relative percentages to avoid yAxis.scale crashes
   const range = payload.high - payload.low;
   if (range === 0) return null;
   
@@ -36,12 +33,10 @@ const CandlestickShape = (props) => {
 };
 
 export default function App() {
-  // --- UI STATE ---
   const [coin, setCoin] = useState('BTC');
   const [timeframe, setTimeframe] = useState('5m');
   const [status, setStatus] = useState('CONNECTING...');
   
-  // --- DATA STATE ---
   const [data, setData] = useState([]);
   const [livePrice, setLivePrice] = useState(0);
   const [vpvrData, setVpvrData] = useState([]);
@@ -51,7 +46,6 @@ export default function App() {
     vpvr: true, vwap: true, sr: true, maxPain: true
   });
 
-  // --- TRADING BOT CLOUD STATE ---
   const [cloudState, setCloudState] = useState({
     balance: 10000,
     activeTrade: null,
@@ -59,18 +53,14 @@ export default function App() {
     history: []
   });
 
-  // --- REFS (Background Memory Banks) ---
   const volumeRef = useRef({ sessionCVD: 0, instantDelta: 0 });
   const lastTradeIdRef = useRef(null);
   const pollingTimerRef = useRef(null);
   const instantDeltaTimerRef = useRef(null);
 
-  // --- CSS & TAILWIND INJECTION (Premium Polish) ---
   useEffect(() => {
-    // 1. Force the browser tab name to update
     document.title = "V3 FlowTerminal | Institutional Flow";
 
-    // 2. Inject Tailwind if missing
     if (!document.getElementById('tailwind-script')) {
       const script = document.createElement('script');
       script.id = 'tailwind-script';
@@ -78,21 +68,19 @@ export default function App() {
       document.head.appendChild(script);
     }
 
-    // 3. Inject Cyberpunk Scrollbars
     if (!document.getElementById('premium-css')) {
       const style = document.createElement('style');
       style.id = 'premium-css';
       style.innerHTML = `
-        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.4); border-radius: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(99, 102, 241, 0.4); border-radius: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(99, 102, 241, 0.8); }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.2); border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(99, 102, 241, 0.5); border-radius: 4px; box-shadow: 0 0 10px rgba(99, 102, 241, 0.5); }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(99, 102, 241, 0.9); }
       `;
       document.head.appendChild(style);
     }
   }, []);
 
-  // --- LOCAL STORAGE CLOUD MOCK ---
   useEffect(() => {
     const saved = localStorage.getItem(`bot_state_${MOCK_APP_ID}`);
     if (saved) setCloudState(JSON.parse(saved));
@@ -103,11 +91,9 @@ export default function App() {
     localStorage.setItem(`bot_state_${MOCK_APP_ID}`, JSON.stringify(newState));
   };
 
-  // --- DERIBIT LIVE OPTIONS ENGINE ---
   useEffect(() => {
     const fetchDeribit = async () => {
       try {
-        // Altcoins like SOL are settled in the USDC pool on Deribit
         const fetchCurrency = coin === 'BTC' || coin === 'ETH' ? coin : 'USDC';
         const res = await fetch(`https://www.deribit.com/api/v2/public/get_book_summary_by_currency?currency=${fetchCurrency}&kind=option`);
         const json = await res.json();
@@ -119,7 +105,6 @@ export default function App() {
         let strikeOI = {};
 
         opts.forEach(item => {
-          // If fetching the USDC pool, isolate the specific coin (e.g. SOL)
           if (fetchCurrency === 'USDC' && !item.instrument_name.startsWith(coin)) return;
 
           const parts = item.instrument_name.split('-');
@@ -146,7 +131,6 @@ export default function App() {
         const bias = pcr < 0.7 ? 'Bullish' : pcr > 1 ? 'Bearish' : 'Neutral';
         setOptionsData({ pcr: pcr.toFixed(2), maxPain: maxPain || (coin === 'BTC' ? 95000 : coin === 'ETH' ? 3500 : 150), bias });
       } catch (e) {
-        // Fallbacks if Deribit fails or is blocked by ISP
         setOptionsData({ pcr: 0.58, maxPain: coin === 'BTC' ? 95000 : coin === 'ETH' ? 3500 : 150, bias: 'Bullish' });
       }
     };
@@ -155,7 +139,6 @@ export default function App() {
     return () => clearInterval(int);
   }, [coin]);
 
-  // --- CORE DATA ENGINE (HTTP POLLING BYPASS) ---
   useEffect(() => {
     setData([]);
     volumeRef.current = { sessionCVD: 0, instantDelta: 0 };
@@ -187,7 +170,7 @@ export default function App() {
             timestamp: d[0],
             open: parseFloat(d[1]),
             high, low, close, vol,
-            candleRange: [low, high], // Used for perfect bounding box
+            candleRange: [low, high],
             vwap: cumulativeVolume > 0 ? (cumulativeTypicalPriceVolume / cumulativeVolume) : close
           };
         });
@@ -248,7 +231,6 @@ export default function App() {
     };
   }, [coin, timeframe]);
 
-  // --- ALGORITHMIC MATH ---
   const highest = useMemo(() => Math.max(...data.map(d => d.high), 0), [data]);
   const lowest = useMemo(() => {
     const min = Math.min(...data.map(d => d.low).filter(n => n > 0));
@@ -282,7 +264,6 @@ export default function App() {
     };
   }, [livePrice, lowest, optionsData, data.length]);
 
-  // --- PAPER TRADING RESOLUTION ENGINE ---
   useEffect(() => {
     if (!cloudState.activeTrade || !cloudState.isRunning) return;
 
@@ -333,20 +314,17 @@ export default function App() {
     }
   }, [scoreEngine.score, cloudState.isRunning]);
 
-  // --- RENDER ENGINE ---
   if (data.length === 0) {
     return (
       <div className="h-screen w-full bg-[#050810] flex flex-col items-center justify-center font-mono relative overflow-hidden">
-        {/* Deep Space Background for Loader */}
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-indigo-900/20 via-[#050810] to-[#050810]" />
         
         <Database className="text-indigo-500 animate-pulse mb-6 drop-shadow-[0_0_15px_rgba(99,102,241,0.8)] z-10" size={56} />
         <div className="text-indigo-400 font-extrabold tracking-widest text-sm uppercase flex items-center gap-3 z-10">
           <RefreshCw size={16} className="animate-spin" />
-          Initializing Neural Link...
+          Synchronizing Neural Link...
         </div>
         
-        {/* Cyberpunk Progress Bar */}
         <div className="w-64 h-1.5 bg-slate-900 rounded-full mt-8 overflow-hidden z-10 border border-white/5 shadow-[0_0_10px_rgba(99,102,241,0.2)]">
           <div className="h-full bg-indigo-500 w-1/2 animate-[ping_1.5s_ease-in-out_infinite] rounded-full shadow-[0_0_10px_rgba(99,102,241,0.8)]"></div>
         </div>
@@ -356,14 +334,10 @@ export default function App() {
 
   return (
     <div className="h-screen w-full bg-[#050810] text-white font-sans overflow-hidden flex relative selection:bg-indigo-500/30">
-      
-      {/* Deep Space Background Gradient */}
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-900/20 via-[#050810] to-[#050810] pointer-events-none -z-10" />
       
       {/* MAIN CHART PANEL */}
-      <div className="flex-1 flex flex-col p-6 pr-4 h-full relative z-10">
-        
-        {/* Header */}
+      <div className="flex-1 flex flex-col p-6 pr-4 h-full relative z-10 overflow-hidden">
         <div className="flex justify-between items-end mb-6">
           <div>
             <div className="flex items-center gap-3 mb-4">
@@ -376,7 +350,6 @@ export default function App() {
                 <button key={c} onClick={() => setCoin(c)} className={`px-4 py-1.5 text-xs font-bold rounded transition-all ${coin === c ? 'bg-indigo-600 shadow-[0_0_15px_rgba(79,70,229,0.5)] text-white' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>{c}</button>
               ))}
               <div className="w-px bg-white/10 mx-1"></div>
-              {/* Added 4h timeframe! */}
               {['1m', '5m', '15m', '1h', '4h'].map(t => (
                 <button key={t} onClick={() => setTimeframe(t)} className={`px-4 py-1.5 text-xs font-bold rounded transition-all ${timeframe === t ? 'bg-slate-700 text-white shadow-md' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}>{t}</button>
               ))}
@@ -394,17 +367,13 @@ export default function App() {
           </div>
         </div>
 
-        {/* Chart Canvas */}
         <div className="flex-1 bg-[#0f172a]/60 backdrop-blur-xl rounded-2xl border border-white/5 shadow-2xl relative overflow-hidden">
-          
-          {/* Absolute VPVR Overlay */}
           {showIndicators.vpvr && vpvrData.length > 0 && (
             <div className="absolute top-0 right-[40px] h-full w-[40%] opacity-40 pointer-events-none z-0">
               {vpvrData.map((bin, i) => {
                 const totalVol = Math.max(...vpvrData.map(b => b.buyVol + b.sellVol), 1);
                 const widthPct = ((bin.buyVol + bin.sellVol) / totalVol) * 100;
                 const buyPct = (bin.buyVol / (bin.buyVol + bin.sellVol)) * 100;
-                
                 const range = yAxisDomain[1] - yAxisDomain[0];
                 const topPct = ((yAxisDomain[1] - bin.price) / range) * 100;
                 
@@ -420,24 +389,19 @@ export default function App() {
 
           <ResponsiveContainer width="100%" height="100%" className="z-10 relative">
             <ComposedChart data={data} margin={{ top: 20, right: 10, left: 0, bottom: 20 }}>
-              {/* Premium Gradient for Volume Bars */}
               <defs>
                 <linearGradient id="colorVolBuy" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#10B981" stopOpacity={0.3}/>
+                  <stop offset="0%" stopColor="#10B981" stopOpacity={0.5}/>
                   <stop offset="100%" stopColor="#10B981" stopOpacity={0.0}/>
                 </linearGradient>
                 <linearGradient id="colorVolSell" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#EF4444" stopOpacity={0.3}/>
+                  <stop offset="0%" stopColor="#EF4444" stopOpacity={0.5}/>
                   <stop offset="100%" stopColor="#EF4444" stopOpacity={0.0}/>
                 </linearGradient>
               </defs>
 
               <XAxis dataKey="timestamp" hide />
-              
-              {/* Primary Price Axis */}
               <YAxis yAxisId="price" domain={yAxisDomain} allowDataOverflow={true} orientation="right" tick={{fill: '#64748b', fontSize: 11, fontWeight: 600}} axisLine={false} tickLine={false} />
-              
-              {/* Hidden Secondary Volume Axis (Scaled to bottom 25% of chart height) */}
               <YAxis yAxisId="vol" domain={[0, maxVol * 4]} hide />
               
               <Tooltip cursor={{stroke: '#334155'}} contentStyle={{backgroundColor: '#0f172a', borderColor: '#1e293b', color: '#fff', borderRadius: '8px', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.5)'}} />
@@ -451,7 +415,6 @@ export default function App() {
               <Bar yAxisId="price" dataKey="candleRange" shape={(props) => <CandlestickShape {...props} />} />
               
               {showIndicators.vwap && <Line yAxisId="price" type="monotone" dataKey="vwap" stroke="#a855f7" strokeWidth={2} strokeDasharray="4 4" dot={false} />}
-              
               {showIndicators.sr && <ReferenceLine yAxisId="price" y={highest} stroke="#f43f5e" strokeWidth={1} strokeDasharray="5 5" strokeOpacity={0.6} ifOverflow="extendDomain" />}
               {showIndicators.sr && <ReferenceLine yAxisId="price" y={lowest} stroke="#10b981" strokeWidth={1} strokeDasharray="5 5" strokeOpacity={0.6} ifOverflow="extendDomain" />}
               
@@ -473,10 +436,8 @@ export default function App() {
         </div>
       </div>
 
-      {/* SIDEBAR PANEL (Scrollable) */}
+      {}
       <div className="w-[380px] shrink-0 h-full p-6 pl-2 overflow-y-auto flex flex-col gap-5 custom-scrollbar relative z-10 pb-12">
-        
-        {/* Indicators Toggle */}
         <div className="shrink-0 bg-[#0f172a]/60 backdrop-blur-xl rounded-2xl border border-white/5 p-5 shadow-xl">
           <h2 className="text-[10px] font-extrabold text-slate-500 mb-4 flex items-center gap-2 tracking-widest uppercase"><Target size={14} className="text-indigo-400"/> Order Flow Engine</h2>
           <div className="flex flex-wrap gap-2">
@@ -488,7 +449,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Strategy Breakdown */}
         <div className="shrink-0 bg-[#0f172a]/60 backdrop-blur-xl rounded-2xl border border-white/5 p-5 shadow-xl">
           <div className="flex justify-between items-end mb-4">
             <span className="text-[9px] text-slate-500 font-bold tracking-widest uppercase">Engine Status</span>
@@ -521,7 +481,6 @@ export default function App() {
           </div>
         </div>
         
-        {/* Deribit Live Options Panel */}
         <div className="shrink-0 bg-[#0f172a]/60 backdrop-blur-xl rounded-2xl border border-white/5 p-5 shadow-xl">
           <h2 className="text-[10px] font-extrabold text-slate-500 mb-4 flex items-center gap-2 tracking-widest uppercase"><Activity size={14} className="text-purple-400"/> Deribit Options Flow</h2>
           <div className="flex justify-between mb-2">
@@ -538,7 +497,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Whale CVD Tracker */}
         <div className="shrink-0 bg-[#0f172a]/60 backdrop-blur-xl rounded-2xl border border-white/5 p-5 shadow-xl">
           <h2 className="text-[10px] font-extrabold text-slate-500 mb-4 flex items-center gap-2 tracking-widest uppercase"><Activity size={14} className="text-cyan-400"/> Whale CVD {'>'} $5K</h2>
           <div className="grid grid-cols-2 gap-3 mb-1">
@@ -557,8 +515,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Paper Auto-Trader */}
-        <div className="shrink-0 min-h-[360px] bg-gradient-to-b from-[#0f172a]/80 to-[#020617]/90 backdrop-blur-xl rounded-2xl border border-indigo-500/20 p-5 shadow-2xl flex flex-col relative overflow-hidden">
+        <div className="shrink-0 min-h-[350px] bg-gradient-to-b from-[#0f172a]/80 to-[#020617]/90 backdrop-blur-xl rounded-2xl border border-indigo-500/20 p-5 shadow-2xl flex flex-col relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-indigo-500"></div>
           
           <h2 className="text-[10px] font-extrabold text-slate-400 mb-4 flex items-center gap-2 tracking-widest uppercase"><Server size={14} className="text-indigo-400"/> Cloud Auto-Trader</h2>
@@ -566,11 +523,11 @@ export default function App() {
           <div className="flex justify-between items-end mb-5 bg-slate-950/50 p-4 rounded-xl border border-white/5 shadow-inner">
             <div>
               <div className="text-[9px] text-slate-500 mb-1 font-bold tracking-widest uppercase">Portfolio Balance</div>
-              <div className="text-2xl font-mono font-extrabold tracking-tighter text-white drop-shadow-md">${cloudState.balance.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
+              <div className="text-2xl font-mono font-extrabold tracking-tighter text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.3)]">${cloudState.balance.toLocaleString('en-US', {minimumFractionDigits: 2})}</div>
             </div>
             {cloudState.activeTrade && (
               <div className="text-right">
-                <div className="text-[9px] text-emerald-400 font-bold mb-1 tracking-widest animate-pulse">ACTIVE LONG</div>
+                <div className="text-[9px] text-emerald-400 font-bold mb-1 tracking-widest animate-pulse drop-shadow-[0_0_5px_rgba(16,185,129,0.8)]">ACTIVE LONG</div>
                 <div className="text-xs font-mono font-bold text-slate-300">EP: ${cloudState.activeTrade.entry.toFixed(2)}</div>
               </div>
             )}
@@ -578,17 +535,16 @@ export default function App() {
 
           <button 
             onClick={() => saveToCloud({...cloudState, isRunning: !cloudState.isRunning})}
-            className={`w-full py-3.5 rounded-xl font-extrabold text-xs tracking-widest uppercase transition-all shadow-lg ${cloudState.isRunning ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30 hover:bg-rose-500/20 shadow-rose-500/10' : 'bg-indigo-600 text-white hover:bg-indigo-500 border border-indigo-400/50 shadow-indigo-600/30'}`}
+            className={`w-full py-3.5 rounded-xl font-extrabold text-xs tracking-widest uppercase transition-all shadow-lg ${cloudState.isRunning ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30 hover:bg-rose-500/20 shadow-rose-500/10' : 'bg-indigo-600 text-white hover:bg-indigo-500 border border-indigo-400/50 shadow-[0_0_15px_rgba(79,70,229,0.4)]'}`}
           >
             {cloudState.isRunning ? '■ Halt Operations' : '▶ Activate Paper Bot'}
           </button>
 
-          {/* Trade History Ledger */}
           {cloudState.history && cloudState.history.length > 0 && (
             <div className="mt-5 pt-5 border-t border-white/5 flex-1">
               <div className="text-[9px] text-slate-500 mb-3 font-bold tracking-widest uppercase flex items-center justify-between">
                 <span>Trading Ledger</span>
-                <span className="bg-white/5 px-2 py-0.5 rounded text-slate-300">
+                <span className="bg-white/5 px-2 py-0.5 rounded text-slate-300 border border-white/5">
                   {cloudState.history.filter(t => t.result === 'SUCCESS').length}W - {cloudState.history.filter(t => t.result === 'FAIL').length}L
                 </span>
               </div>
@@ -605,11 +561,11 @@ export default function App() {
                       <span className={`font-mono font-bold tracking-tighter text-sm ${log.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                         {log.pnl >= 0 ? '+' : ''}${log.pnl.toFixed(2)}
                       </span>
-                      {log.entryPrice && (
-                        <span className="text-[8px] text-slate-500 font-mono mt-0.5 font-semibold">
-                          EP: ${log.entryPrice.toFixed(1)} → XP: ${log.exitPrice.toFixed(1)}
+                      {log.entryPrice ? (
+                        <span className="text-[9px] text-slate-300 font-mono mt-1 font-semibold bg-slate-950/50 px-1.5 py-0.5 rounded border border-white/5 shadow-inner">
+                          Entry: ${log.entryPrice.toFixed(2)} → Sell: ${log.exitPrice?.toFixed(2)}
                         </span>
-                      )}
+                      ) : null}
                     </div>
                   </div>
                 ))}
@@ -618,7 +574,7 @@ export default function App() {
           )}
 
           <div className="mt-5 pt-4 border-t border-white/5 flex justify-between text-[9px] text-slate-600 font-bold tracking-widest uppercase">
-            <span className="flex items-center gap-1.5"><div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div> Local Sync Active</span>
+            <span className="flex items-center gap-1.5"><div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_5px_rgba(16,185,129,0.8)]"></div> Local Sync Active</span>
             <span>ID: {MOCK_APP_ID.split('-')[0]}</span>
           </div>
         </div>

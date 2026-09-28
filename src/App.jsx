@@ -230,7 +230,8 @@ export default function App() {
         tradeRaw.forEach(t => {
           if (t.id === lastTradeIdRef.current) return; 
           const qty = parseFloat(t.qty) * parseFloat(t.price);
-          if (qty > 5000) { 
+          // STRATEGY FIX: Bumped Whale Filter from $5,000 to $50,000 per trade
+          if (qty > 50000) { 
             if (t.isBuyerMaker) {
               volumeRef.current.sessionCVD -= qty;
               volumeRef.current.instantDelta -= qty;
@@ -299,22 +300,24 @@ export default function App() {
     let shortScore = 0;
     let currentVwap = data.length > 0 ? data[data.length - 1].vwap : livePrice;
 
-    // Distance to key levels
+    // Distance to key levels (Requires closer proximity now)
     const distToSupport = Math.abs(livePrice - lowest) / lowest;
     const distToResistance = Math.abs(highest - livePrice) / highest;
 
-    const atSupport = distToSupport < 0.005; 
-    const atResistance = distToResistance < 0.005; 
+    const atSupport = distToSupport < 0.003; 
+    const atResistance = distToResistance < 0.003; 
 
     if (atSupport) longScore += 2;
     if (atResistance) shortScore += 2;
 
-    // Tape / Delta Logic
-    const strongBuyDelta = volumeRef.current.instantDelta > 5000;
-    const strongSellDelta = volumeRef.current.instantDelta < -5000;
+    // STRATEGY FIX: Heavy Tape Logic (Delta > $150k + CVD Confirmation)
+    const strongBuyDelta = volumeRef.current.instantDelta > 150000;
+    const strongSellDelta = volumeRef.current.instantDelta < -150000;
+    const cvdAlignsLong = volumeRef.current.sessionCVD > 0;
+    const cvdAlignsShort = volumeRef.current.sessionCVD < 0;
     
-    if (atSupport && strongBuyDelta) longScore += 2;
-    if (atResistance && strongSellDelta) shortScore += 2;
+    if (atSupport && strongBuyDelta && cvdAlignsLong) longScore += 2;
+    if (atResistance && strongSellDelta && cvdAlignsShort) shortScore += 2;
 
     // Trend / VWAP alignment
     if (livePrice > currentVwap) longScore += 1;
@@ -334,7 +337,7 @@ export default function App() {
       conditions: [
         { label: 'Price Location', value: atSupport ? 'Support Bound' : atResistance ? 'Resistance Bound' : 'Mid-Range', good: atSupport || atResistance },
         { label: 'Trend Align (VWAP)', value: isLongSetup && livePrice > currentVwap ? 'Bullish' : (!isLongSetup && livePrice < currentVwap ? 'Bearish' : 'Fighting Trend'), good: (isLongSetup && livePrice > currentVwap) || (!isLongSetup && livePrice < currentVwap) },
-        { label: 'Tape Flow', value: isLongSetup && strongBuyDelta ? 'Buyer Step-in' : (!isLongSetup && strongSellDelta ? 'Seller Step-in' : 'Neutral Tape'), good: (isLongSetup && strongBuyDelta) || (!isLongSetup && strongSellDelta) },
+        { label: 'Tape Flow', value: isLongSetup && strongBuyDelta ? 'Heavy Absorption' : (!isLongSetup && strongSellDelta ? 'Heavy Rejection' : 'Retail Noise'), good: (isLongSetup && strongBuyDelta) || (!isLongSetup && strongSellDelta) },
         { label: 'Options Bias', value: optionsData.bias, good: (isLongSetup && optionsData.bias === 'Bullish') || (!isLongSetup && optionsData.bias === 'Bearish') }
       ]
     };
@@ -349,15 +352,14 @@ export default function App() {
     let result = '';
     let exitPrice = 0;
 
-    // Handle Long Resolution (Wider 1.5% SL to prevent noise-outs)
+    // STRATEGY FIX: Realistic 1:2 Day Trading Math (1.5% TP / 0.75% SL)
     if (trade.type === 'LONG') {
-      if (livePrice >= trade.tp) { closed = true; pnl = (cloudState.balance * 0.03); result = 'SUCCESS'; exitPrice = trade.tp; }
-      else if (livePrice <= trade.sl) { closed = true; pnl = -(cloudState.balance * 0.015); result = 'FAIL'; exitPrice = trade.sl; }
+      if (livePrice >= trade.tp) { closed = true; pnl = (cloudState.balance * 0.015); result = 'SUCCESS'; exitPrice = trade.tp; }
+      else if (livePrice <= trade.sl) { closed = true; pnl = -(cloudState.balance * 0.0075); result = 'FAIL'; exitPrice = trade.sl; }
     } 
-    // Handle Short Resolution
     else if (trade.type === 'SHORT') {
-      if (livePrice <= trade.tp) { closed = true; pnl = (cloudState.balance * 0.03); result = 'SUCCESS'; exitPrice = trade.tp; }
-      else if (livePrice >= trade.sl) { closed = true; pnl = -(cloudState.balance * 0.015); result = 'FAIL'; exitPrice = trade.sl; }
+      if (livePrice <= trade.tp) { closed = true; pnl = (cloudState.balance * 0.015); result = 'SUCCESS'; exitPrice = trade.tp; }
+      else if (livePrice >= trade.sl) { closed = true; pnl = -(cloudState.balance * 0.0075); result = 'FAIL'; exitPrice = trade.sl; }
     }
 
     if (closed) {
@@ -390,8 +392,9 @@ export default function App() {
           pair: coin,
           type: type,
           entry: livePrice,
-          sl: type === 'LONG' ? livePrice * 0.985 : livePrice * 1.015,
-          tp: type === 'LONG' ? livePrice * 1.03 : livePrice * 0.97
+          // 0.75% Stop Loss, 1.5% Take Profit for quicker resolution
+          sl: type === 'LONG' ? livePrice * 0.9925 : livePrice * 1.0075,
+          tp: type === 'LONG' ? livePrice * 1.015 : livePrice * 0.985
         }
       });
     }
@@ -427,26 +430,26 @@ export default function App() {
       <div className="scanlines"></div>
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-900/10 via-[#020617]/80 to-[#020617] pointer-events-none -z-10" />
       
-      {/* MAIN CHART PANEL - MOBILE OPTIMIZED */}
+      {/* MAIN CHART PANEL */}
       <div className="flex-none lg:flex-1 h-[55vh] lg:h-full flex flex-col p-3 lg:p-6 lg:pr-4 relative z-10 overflow-hidden">
         
         {/* RESPONSIVE HEADER */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-4 lg:mb-6 gap-3 lg:gap-0">
           <div className="w-full md:w-auto">
             <div className="flex items-center gap-3 mb-3 lg:mb-4">
-              <div className="p-2 bg-indigo-500/10 border border-indigo-500/30 rounded-lg shadow-[0_0_15px_rgba(99,102,241,0.2)]">
+              <div className="p-2 bg-[#09090b] border border-white/5 rounded-lg shadow-inner">
                 <Terminal className="text-indigo-400" size={20} />
               </div>
               <h1 className="text-2xl lg:text-3xl font-extrabold tracking-tighter text-white drop-shadow-md">V3 Flow<span className="text-indigo-500">Terminal</span></h1>
             </div>
             
-            <div className="flex flex-wrap gap-2 mb-2 bg-[#09090b]/80 p-1.5 rounded-lg border border-white/5 backdrop-blur-xl shadow-2xl w-full md:w-fit">
+            <div className="flex flex-wrap gap-2 mb-2 bg-[#09090b]/80 p-1.5 rounded-lg border border-white/5 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_10px_30px_rgba(0,0,0,0.5)] w-full md:w-fit">
               {['BTC', 'ETH', 'SOL'].map(c => (
                 <button key={c} onClick={() => setCoin(c)} className={`px-4 py-1.5 text-xs font-bold rounded transition-all ${coin === c ? 'bg-indigo-600 shadow-[0_0_15px_rgba(79,70,229,0.5)] text-white' : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'}`}>{c}</button>
               ))}
               <div className="w-px bg-white/10 mx-1 hidden sm:block"></div>
               {['1m', '5m', '15m', '1h', '4h'].map(t => (
-                <button key={t} onClick={() => setTimeframe(t)} className={`px-3 py-1.5 text-xs font-bold rounded transition-all ${timeframe === t ? 'bg-slate-800 text-white shadow-md border border-white/10' : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'}`}>{t}</button>
+                <button key={t} onClick={() => setTimeframe(t)} className={`px-3 py-1.5 text-xs font-bold rounded transition-all ${timeframe === t ? 'bg-slate-800 text-slate-200 shadow-md border border-white/10' : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'}`}>{t}</button>
               ))}
             </div>
           </div>
@@ -455,7 +458,7 @@ export default function App() {
             <div className={`text-4xl lg:text-5xl font-mono font-black tracking-tighter transition-colors ${data[data.length-1].close >= data[data.length-1].open ? 'text-emerald-400 drop-shadow-[0_0_15px_rgba(16,185,129,0.3)]' : 'text-rose-500 drop-shadow-[0_0_15px_rgba(244,63,94,0.3)]'}`}>
               ${livePrice.toLocaleString('en-US', {minimumFractionDigits: 2})}
             </div>
-            <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full text-[10px] font-bold tracking-widest text-emerald-400 mt-2 lg:mt-3 uppercase shadow-[0_0_10px_rgba(16,185,129,0.1)]">
+            <div className="flex items-center gap-2 px-3 py-1 bg-[#09090b] border border-white/5 rounded-full text-[10px] font-bold tracking-widest text-emerald-400 mt-2 lg:mt-3 uppercase shadow-inner">
               <RefreshCw size={12} className={status.includes('SECURED') ? 'animate-spin' : ''} />
               {status}
             </div>
@@ -487,17 +490,17 @@ export default function App() {
             <ComposedChart data={data} margin={{ top: 20, right: 10, left: 0, bottom: 20 }}>
               <defs>
                 <linearGradient id="colorVolBuy" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#10B981" stopOpacity={0.8}/>
+                  <stop offset="0%" stopColor="#10B981" stopOpacity={0.6}/>
                   <stop offset="100%" stopColor="#10B981" stopOpacity={0.0}/>
                 </linearGradient>
                 <linearGradient id="colorVolSell" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#F43F5E" stopOpacity={0.8}/>
+                  <stop offset="0%" stopColor="#F43F5E" stopOpacity={0.6}/>
                   <stop offset="100%" stopColor="#F43F5E" stopOpacity={0.0}/>
                 </linearGradient>
               </defs>
 
               <XAxis dataKey="timestamp" hide />
-              <YAxis yAxisId="price" domain={yAxisDomain} allowDataOverflow={true} orientation="right" tick={{fill: '#94a3b8', fontSize: 11, fontFamily: 'JetBrains Mono'}} axisLine={false} tickLine={false} />
+              <YAxis yAxisId="price" domain={yAxisDomain} allowDataOverflow={true} orientation="right" tick={{fill: '#cbd5e1', fontSize: 11, fontFamily: 'JetBrains Mono'}} axisLine={false} tickLine={false} />
               <YAxis yAxisId="vol" domain={[0, maxVol * 4]} hide />
               
               <Tooltip cursor={{stroke: '#334155', strokeWidth: 1, strokeDasharray: '4 4'}} contentStyle={{backgroundColor: '#09090b', borderColor: '#1e293b', color: '#f8fafc', borderRadius: '8px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)', fontFamily: 'JetBrains Mono', fontSize: '12px'}} />
@@ -555,13 +558,13 @@ export default function App() {
             <span className="text-[11px] text-slate-300 font-black tracking-[0.2em] uppercase">
               Algorithmic Score <span className={`ml-1 ${scoreEngine.type === 'LONG' ? 'text-emerald-400' : 'text-rose-400'}`}>[{scoreEngine.type}]</span>
             </span>
-            <span className="text-2xl font-mono font-black text-white drop-shadow-md">{scoreEngine.score} <span className="text-slate-400 text-lg">/ 6</span></span>
+            <span className="text-2xl font-mono font-black text-white drop-shadow-md">{scoreEngine.score} <span className="text-slate-600 text-lg">/ 6</span></span>
           </div>
           
           <div className="space-y-2">
             {scoreEngine.conditions.map((cond, i) => (
               <div key={i} className="flex justify-between items-center p-2 rounded bg-[#020617] border border-white/5 shadow-inner">
-                <span className="text-[11px] text-slate-300 font-bold tracking-wider">{cond.label}</span>
+                <span className="text-[11px] text-slate-400 font-bold tracking-wider">{cond.label}</span>
                 <div className={`px-2 py-0.5 rounded-full text-[10px] font-black tracking-widest uppercase border ${cond.good ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.15)]' : 'bg-slate-800/50 border-slate-700/50 text-slate-500'}`}>
                   {cond.value}
                 </div>

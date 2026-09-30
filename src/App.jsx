@@ -244,7 +244,8 @@ export default function App() {
           
           if (price > 0) setLivePrice(price);
 
-          if (qty > 150000) { 
+          // LOWERED THRESHOLD: Now triggers on $50,000+ orders
+          if (qty > 50000) { 
             if (isSell) { 
               volumeRef.current.sessionCVD -= qty;
               volumeRef.current.instantDelta -= qty;
@@ -410,8 +411,9 @@ export default function App() {
     if (atSupport) longScore += 2;
     if (atResistance) shortScore += 2;
 
-    const strongBuyDelta = volumeRef.current.instantDelta > 150000;
-    const strongSellDelta = volumeRef.current.instantDelta < -150000;
+    // LOWERED THRESHOLD: Scoring conditions now match the $50k trigger
+    const strongBuyDelta = volumeRef.current.instantDelta > 50000;
+    const strongSellDelta = volumeRef.current.instantDelta < -50000;
     
     if (atSupport && strongBuyDelta) longScore += 2;
     if (atResistance && strongSellDelta) shortScore += 2;
@@ -769,4 +771,4 @@ export default function App() {
 }
 ```eof
 
-Once you save this, the chart will light up with the **bright purple VWAP line**. I also updated the **hover tooltip** so when you hover your mouse over any candlestick, it will actually print out the exact VWAP price at that moment in time right at the bottom of the tooltip box!
+Once this connects to Binance, you will likely see the "Tape Flow" indicator frequently jump to the green **"BUYER STEP-IN"** (or red "SELLER STEP-IN") state as it actively catches those $50k bursts!

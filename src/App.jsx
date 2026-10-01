@@ -1,42 +1,14 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { ComposedChart, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, Bar, Line, Cell } from 'recharts';
-import { Activity, Server, Target, RefreshCw, Terminal, Cpu } from 'lucide-react';
+import { Activity, Server, Target, RefreshCw, Terminal, Cpu, RotateCcw } from 'lucide-react';
 
 const MOCK_APP_ID = "v3-flow-terminal-master-live"; 
 
-const CandlestickShape = (props) => {
-  const { x, y, width, height, payload } = props;
-  if (typeof x !== 'number' || typeof y !== 'number' || typeof width !== 'number' || typeof height !== 'number') return null;
-  if (!payload || typeof payload.open !== 'number' || typeof payload.high !== 'number') return null;
-  
-  const isGreen = payload.close >= payload.open;
-  const color = isGreen ? '#10B981' : '#F43F5E';
-  
-  const range = payload.high - payload.low;
-  if (range === 0) return null;
-  
-  const openPct = (payload.high - payload.open) / range;
-  const closePct = (payload.high - payload.close) / range;
-  
-  const openY = y + (height * openPct);
-  const closeY = y + (height * closePct);
-  
-  const boxTop = Math.min(openY, closeY);
-  const boxHeight = Math.max(Math.abs(openY - closeY), 1.5);
-  
-  return (
-    <g>
-      <line x1={x + width / 2} y1={y} x2={x + width / 2} y2={y + height} stroke={color} strokeWidth={1.5} opacity={0.8} />
-      <rect x={x + width * 0.15} y={boxTop} width={width * 0.7} height={boxHeight} fill={color} stroke={color} strokeWidth={1} rx={1} />
-    </g>
-  );
-};
-
-const CustomTooltip = ({ active, payload }) => {
+// 1. PURE FUNCTION RENDERERS (No JSX Props injection to prevent React 18 crashes)
+const renderCustomTooltip = ({ active, payload }) => {
   if (active && payload && payload.length > 0) {
     const data = payload[0].payload;
     if (!data) return null;
-    
     return (
       <div className="bg-[#09090b] border border-slate-800 p-3 rounded-lg shadow-xl font-mono text-xs text-slate-200 z-50">
         <div className="text-slate-400 mb-2 border-b border-slate-800 pb-1">
@@ -54,20 +26,32 @@ const CustomTooltip = ({ active, payload }) => {
   return null;
 };
 
-const MaxPainLabel = (props) => {
-  const { viewBox, value, position } = props;
-  const yOffset = position && position.includes('Top') ? 15 : -5;
+const renderCandlestick = (props) => {
+  const { x, y, width, height, payload } = props;
+  
+  if (x === undefined || y === undefined || width === undefined || height === undefined) return <g></g>;
+  if (!payload || payload.open === undefined || payload.high === undefined) return <g></g>;
+  
+  const isGreen = payload.close >= payload.open;
+  const color = isGreen ? '#10B981' : '#F43F5E';
+  
+  const range = payload.high - payload.low;
+  if (range <= 0) return <g></g>;
+  
+  const openPct = (payload.high - payload.open) / range;
+  const closePct = (payload.high - payload.close) / range;
+  
+  const openY = y + (height * openPct);
+  const closeY = y + (height * closePct);
+  
+  const boxTop = Math.min(openY, closeY);
+  const boxHeight = Math.max(Math.abs(openY - closeY), 1.5);
+  
   return (
-    <text
-      x={(viewBox?.x || 0) + 10}
-      y={(viewBox?.y || 0) + yOffset}
-      fill="#fbbf24"
-      fontSize={11}
-      fontFamily="JetBrains Mono"
-      fontWeight="bold"
-    >
-      {value}
-    </text>
+    <g>
+      <line x1={x + width / 2} y1={y} x2={x + width / 2} y2={y + height} stroke={color} strokeWidth={1.5} opacity={0.8} />
+      <rect x={x + width * 0.15} y={boxTop} width={width * 0.7} height={boxHeight} fill={color} stroke={color} strokeWidth={1} rx={1} />
+    </g>
   );
 };
 
@@ -91,9 +75,12 @@ export default function App() {
     history: []
   });
 
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+
   const volumeRef = useRef({ sessionCVD: 0, instantDelta: 0 });
   const instantDeltaTimerRef = useRef(null);
 
+  // 2. STABLE INITIALIZATION
   useEffect(() => {
     document.title = "V3 FlowTerminal | Institutional Flow";
 
@@ -109,7 +96,7 @@ export default function App() {
       style.id = 'premium-css';
       style.innerHTML = `
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800&family=Inter:wght@400;600;800&display=swap');
-        body { font-family: 'Inter', sans-serif; background-color: #020617; }
+        body { font-family: 'Inter', sans-serif; background-color: #020617; margin: 0; padding: 0; }
         .font-mono { font-family: 'JetBrains Mono', monospace; }
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: rgba(2, 6, 23, 0.5); border-radius: 4px; }
@@ -133,11 +120,9 @@ export default function App() {
     try {
       const saved = localStorage.getItem(`bot_state_${MOCK_APP_ID}`);
       if (saved) {
-        const parsedState = JSON.parse(saved);
-        setCloudState(parsedState);
+        setCloudState(JSON.parse(saved));
       }
     } catch (e) {
-      console.warn("Corrupted local storage detected. Resetting state.");
       localStorage.removeItem(`bot_state_${MOCK_APP_ID}`);
     }
   }, []);
@@ -147,10 +132,16 @@ export default function App() {
     try {
       localStorage.setItem(`bot_state_${MOCK_APP_ID}`, JSON.stringify(newState));
     } catch (e) {
-      console.error("Failed to save state.");
+      console.error("Save failed", e);
     }
   };
 
+  const executeReset = () => {
+    saveToCloud({ balance: 10000, activeTrade: null, isRunning: false, history: [] });
+    setShowResetConfirm(false);
+  };
+
+  // 3. DERIBIT OPTIONS POLLING
   useEffect(() => {
     let isMounted = true;
     const fetchDeribit = async () => {
@@ -207,6 +198,7 @@ export default function App() {
     return () => { isMounted = false; clearInterval(int); };
   }, [coin]);
 
+  // 4. WEBSOCKET ENGINE (BINANCE)
   useEffect(() => {
     let isMounted = true;
     let ws = null;
@@ -217,7 +209,6 @@ export default function App() {
 
     setStatus('CONNECTING WSS...');
 
-    // Binance format requires lowercase stream names
     const symbol = `${coin}USDT`.toLowerCase();
     const streams = `${symbol}@trade/${symbol}@kline_${timeframe}`;
     
@@ -235,16 +226,13 @@ export default function App() {
         
         const payload = msg.data;
 
-        // --- BINANCE WHALE TAPE PARSING ---
         if (payload.e === 'trade') {
           const price = parseFloat(payload.p) || 0;
           const qty = (parseFloat(payload.q) || 0) * price;
-          // In Binance: 'm' is true if the buyer is the market maker (meaning a sell order hit the bid)
           const isSell = payload.m; 
           
           if (price > 0) setLivePrice(price);
 
-          // LOWERED THRESHOLD: Now triggers on $50,000+ orders
           if (qty > 50000) { 
             if (isSell) { 
               volumeRef.current.sessionCVD -= qty;
@@ -256,7 +244,6 @@ export default function App() {
           }
         }
 
-        // --- BINANCE CANDLESTICK PARSING ---
         if (payload.e === 'kline') {
           const k = payload.k;
           
@@ -313,7 +300,7 @@ export default function App() {
           });
         }
       } catch (e) {
-        // Silently catch JSON parse errors from websocket
+        // Safe catch
       }
     };
     
@@ -332,6 +319,7 @@ export default function App() {
     };
   }, [coin, timeframe]);
 
+  // 5. MEMOIZED DATA COMPUTATIONS
   const vpvrData = useMemo(() => {
     if (!data || data.length === 0) return [];
     const bins = {};
@@ -373,21 +361,6 @@ export default function App() {
     return [lowest - buffer, highest + buffer];
   }, [highest, lowest]);
 
-  const maxPainRenderData = useMemo(() => {
-    if (!yAxisDomain || yAxisDomain.length < 2) return null;
-    const [min, max] = yAxisDomain;
-    const range = max - min;
-    const mp = optionsData.maxPain || 0;
-    
-    if (mp > max) {
-        return { y: max - (range * 0.02), label: `[ GAMMA WALL: $${mp.toLocaleString()} ↗ ]`, position: 'insideBottomLeft' };
-    } 
-    else if (mp < min) {
-        return { y: min + (range * 0.02), label: `[ GAMMA WALL: $${mp.toLocaleString()} ↘ ]`, position: 'insideTopLeft' };
-    }
-    return { y: mp, label: `[ MAX PAIN: $${mp.toLocaleString()} ]`, position: 'insideTopLeft' };
-  }, [optionsData.maxPain, yAxisDomain]);
-
   const maxVol = useMemo(() => {
     if (data.length === 0) return 0;
     const max = Math.max(...data.map(d => d.vol));
@@ -411,7 +384,6 @@ export default function App() {
     if (atSupport) longScore += 2;
     if (atResistance) shortScore += 2;
 
-    // LOWERED THRESHOLD: Scoring conditions now match the $50k trigger
     const strongBuyDelta = volumeRef.current.instantDelta > 50000;
     const strongSellDelta = volumeRef.current.instantDelta < -50000;
     
@@ -439,6 +411,7 @@ export default function App() {
     };
   }, [livePrice, lowest, highest, optionsData, data.length]);
 
+  // 6. AUTO-TRADER EXECUTION
   useEffect(() => {
     if (!cloudState.activeTrade || !cloudState.isRunning || livePrice === 0) return;
 
@@ -590,10 +563,10 @@ export default function App() {
               </defs>
 
               <XAxis dataKey="timestamp" hide />
-              <YAxis yAxisId="price" domain={yAxisDomain} allowDataOverflow={true} orientation="right" tick={{fill: '#cbd5e1', fontSize: 11, fontFamily: 'JetBrains Mono'}} axisLine={false} tickLine={false} />
+              <YAxis yAxisId="price" domain={yAxisDomain} allowDataOverflow={true} orientation="right" tick={{fill: '#cbd5e1', fontSize: 11, fontFamily: 'monospace'}} axisLine={false} tickLine={false} />
               <YAxis yAxisId="vol" domain={[0, maxVol * 4]} hide />
               
-              <Tooltip cursor={{stroke: '#334155', strokeWidth: 1, strokeDasharray: '4 4'}} content={CustomTooltip} isAnimationActive={false} />
+              <Tooltip cursor={{stroke: '#334155', strokeWidth: 1, strokeDasharray: '4 4'}} content={renderCustomTooltip} isAnimationActive={false} />
               
               <Bar yAxisId="vol" dataKey="vol" radius={[4, 4, 0, 0]} isAnimationActive={false}>
                 {data.map((entry, index) => (
@@ -601,9 +574,8 @@ export default function App() {
                 ))}
               </Bar>
               
-              <Bar yAxisId="price" dataKey="candleRange" shape={CandlestickShape} isAnimationActive={false} />
+              <Bar yAxisId="price" dataKey="candleRange" shape={renderCandlestick} isAnimationActive={false} />
               
-              {/* ENHANCED VWAP LINE */}
               {showIndicators.vwap && (
                 <Line 
                   yAxisId="price" 
@@ -621,14 +593,14 @@ export default function App() {
               {showIndicators.sr && <ReferenceLine yAxisId="price" y={highest} stroke="#F43F5E" strokeWidth={1} strokeDasharray="5 5" strokeOpacity={0.8} ifOverflow="extendDomain" />}
               {showIndicators.sr && <ReferenceLine yAxisId="price" y={lowest} stroke="#10B981" strokeWidth={1} strokeDasharray="5 5" strokeOpacity={0.8} ifOverflow="extendDomain" />}
               
-              {showIndicators.maxPain && maxPainRenderData && (
+              {showIndicators.maxPain && optionsData.maxPain > 0 && (
                 <ReferenceLine 
                   yAxisId="price" 
-                  y={maxPainRenderData.y} 
+                  y={optionsData.maxPain} 
                   stroke="#fbbf24" 
                   strokeWidth={2} 
                   strokeDasharray="4 4"
-                  label={(props) => <MaxPainLabel {...props} value={maxPainRenderData.label} position={maxPainRenderData.position} />}
+                  label={{ position: 'insideTopLeft', value: `MAX PAIN: $${optionsData.maxPain.toLocaleString()}`, fill: '#fbbf24', fontSize: 11, fontWeight: 'bold' }}
                 />
               )}
             </ComposedChart>
@@ -701,9 +673,36 @@ export default function App() {
         <div className="shrink-0 min-h-[350px] bg-[#09090b] rounded-xl border border-indigo-500/30 p-5 shadow-[0_0_30px_rgba(79,70,229,0.1),inset_0_1px_0_rgba(255,255,255,0.05)] flex flex-col relative overflow-hidden mb-8 lg:mb-0">
           <div className="absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-cyan-400 via-indigo-500 to-purple-500 shadow-[0_0_10px_rgba(99,102,241,0.8)]"></div>
           
-          <h2 className="text-[11px] font-black text-slate-300 mb-4 flex items-center gap-2 tracking-[0.2em] uppercase drop-shadow-sm">
-            <Server size={14} className="text-indigo-400"/> Cloud Auto-Trader
-          </h2>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-[11px] font-black text-slate-300 flex items-center gap-2 tracking-[0.2em] uppercase drop-shadow-sm">
+              <Server size={14} className="text-indigo-400"/> Cloud Auto-Trader
+            </h2>
+            
+            {showResetConfirm ? (
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={executeReset}
+                  className="px-2 py-0.5 bg-rose-600 text-white rounded text-[9px] font-bold tracking-widest uppercase transition-all shadow-lg"
+                >
+                  Confirm Wipe
+                </button>
+                <button 
+                  onClick={() => setShowResetConfirm(false)}
+                  className="px-2 py-0.5 bg-slate-800 text-slate-300 rounded text-[9px] font-bold tracking-widest uppercase transition-all"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button 
+                onClick={() => setShowResetConfirm(true)}
+                className="flex items-center gap-1.5 px-2 py-1 bg-[#020617] text-slate-400 hover:text-rose-400 border border-white/5 hover:border-rose-500/30 rounded text-[9px] font-bold tracking-widest uppercase transition-all shadow-inner"
+                title="Reset Portfolio Balance & History"
+              >
+                <RotateCcw size={10} /> Reset
+              </button>
+            )}
+          </div>
           
           <div className="flex justify-between items-end mb-5 bg-[#020617] p-4 rounded-lg border border-white/5 shadow-inner">
             <div>
@@ -770,5 +769,3 @@ export default function App() {
   );
 }
 ```eof
-
-Once this connects to Binance, you will likely see the "Tape Flow" indicator frequently jump to the green **"BUYER STEP-IN"** (or red "SELLER STEP-IN") state as it actively catches those $50k bursts!

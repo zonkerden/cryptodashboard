@@ -4,7 +4,7 @@ import { Activity, Server, Target, RefreshCw, Terminal, Cpu, RotateCcw } from 'l
 
 const MOCK_APP_ID = "v3-flow-terminal-master-live"; 
 
-// 1. PURE FUNCTION RENDERERS (No JSX Props injection to prevent React 18 crashes)
+// 1. PURE FUNCTION RENDERERS
 const renderCustomTooltip = ({ active, payload }) => {
   if (active && payload && payload.length > 0) {
     const data = payload[0].payload;
@@ -58,7 +58,7 @@ const renderCandlestick = (props) => {
 export default function App() {
   const [coin, setCoin] = useState('BTC');
   const [timeframe, setTimeframe] = useState('5m');
-  const [status, setStatus] = useState('SYNCING HISTORY...');
+  const [status, setStatus] = useState('INITIALIZING ENGINE...');
   
   const [data, setData] = useState([]);
   const [livePrice, setLivePrice] = useState(0);
@@ -198,22 +198,106 @@ export default function App() {
     return () => { isMounted = false; clearInterval(int); };
   }, [coin]);
 
-  // 4. WEBSOCKET ENGINE (BINANCE) + HISTORICAL REST SEEDING
+  // 4. DUAL-ENGINE: WEBSOCKET + CANVAS HTTPS REST FALLBACK
   useEffect(() => {
     let isMounted = true;
     let ws = null;
+    let pollTimer = null;
 
     setData([]); 
     volumeRef.current = { sessionCVD: 0, instantDelta: 0 };
     if (instantDeltaTimerRef.current) clearInterval(instantDeltaTimerRef.current);
 
+    const fetchSymbol = `${coin}USDT`;
+
+    // THE REST POLLING ENGINE (Failsafe for Canvas/VPN Blocks)
+    let lastTradeId = 0;
+    const startPolling = () => {
+      if (!isMounted) return;
+      setStatus('SECURED: BINANCE REST POLLING (CANVAS OVERRIDE)');
+      
+      pollTimer = setInterval(async () => {
+        try {
+          // Poll Whale Trades
+          const tRes = await fetch(`https://data-api.binance.vision/api/v3/trades?symbol=${fetchSymbol}&limit=20`);
+          if (tRes.ok) {
+            const trades = await tRes.json();
+            trades.forEach(t => {
+              if (t.id > lastTradeId) {
+                lastTradeId = t.id;
+                const price = parseFloat(t.price);
+                const qty = parseFloat(t.qty) * price;
+                const isSell = t.isBuyerMaker;
+                
+                if (price > 0) setLivePrice(price);
+
+                if (qty > 20000) { 
+                  volumeRef.current.sessionCVD += (isSell ? -qty : qty);
+                  volumeRef.current.instantDelta += (isSell ? -qty : qty);
+                }
+              }
+            });
+          }
+
+          // Poll Latest Candle
+          const kRes = await fetch(`https://data-api.binance.vision/api/v3/klines?symbol=${fetchSymbol}&interval=${timeframe}&limit=2`);
+          if (kRes.ok) {
+            const klines = await kRes.json();
+            const k = klines[klines.length - 1];
+            const timestamp = parseInt(k[0]);
+            const open = parseFloat(k[1]);
+            const high = parseFloat(k[2]);
+            const low = parseFloat(k[3]);
+            const close = parseFloat(k[4]);
+            const vol = parseFloat(k[5]);
+            const typ = (high + low + close) / 3;
+
+            setData(prevData => {
+              if (prevData.length === 0) return prevData;
+              const newData = [...prevData];
+              const last = newData[newData.length - 1];
+              
+              if (timestamp === last.timestamp) {
+                const prevCandle = newData.length > 1 ? newData[newData.length - 2] : null;
+                let currCumVol = prevCandle ? prevCandle.cumulativeVolume + vol : vol;
+                let currCumTypVol = prevCandle ? prevCandle.cumulativeTypicalPriceVolume + (typ * vol) : (typ * vol);
+                
+                newData[newData.length - 1] = {
+                  timestamp, open, high, low, close, vol,
+                  candleRange: [low, high],
+                  vwap: currCumVol > 0 ? (currCumTypVol / currCumVol) : close,
+                  cumulativeVolume: currCumVol,
+                  cumulativeTypicalPriceVolume: currCumTypVol
+                };
+              } else if (timestamp > last.timestamp) {
+                const currCumVol = last.cumulativeVolume + vol;
+                const currCumTypVol = last.cumulativeTypicalPriceVolume + (typ * vol);
+                
+                newData.push({
+                  timestamp, open, high, low, close, vol,
+                  candleRange: [low, high],
+                  vwap: currCumVol > 0 ? (currCumTypVol / currCumVol) : close,
+                  cumulativeVolume: currCumVol,
+                  cumulativeTypicalPriceVolume: currCumTypVol
+                });
+                if (newData.length > 150) newData.shift();
+              }
+              return newData;
+            });
+          }
+        } catch (e) {
+          // Silently skip failed polls
+        }
+      }, 2500); // 2.5s safe polling rate
+    };
+
     const initializeDataAndSocket = async () => {
       try {
         if (isMounted) setStatus('SYNCING HISTORY...');
         
-        // 1. Seed the chart with the last 100 historical candles for beautiful proportions
-        const fetchSymbol = `${coin}USDT`;
-        const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${fetchSymbol}&interval=${timeframe}&limit=100`);
+        // 1. Seed History safely via Vision API to bypass ISP blocks
+        const res = await fetch(`https://data-api.binance.vision/api/v3/klines?symbol=${fetchSymbol}&interval=${timeframe}&limit=100`);
+        if (!res.ok) throw new Error("History Blocked");
         const klines = await res.json();
         
         if (!isMounted) return;
@@ -243,16 +327,20 @@ export default function App() {
         });
 
         setData(historicalData);
-        if (historicalData.length > 0) {
-            setLivePrice(historicalData[historicalData.length - 1].close);
-        }
+        if (historicalData.length > 0) setLivePrice(historicalData[historicalData.length - 1].close);
 
-        // 2. Hand off cleanly to Live WebSocket
-        if (isMounted) setStatus('CONNECTING WSS...');
+      } catch (err) {
+        console.warn("History fetch failed, continuing to live engine anyway.");
+      }
+
+      // 2. The Dual-Engine Boot
+      if (isMounted) setStatus('CONNECTING WSS...');
+      
+      try {
         const wsSymbol = fetchSymbol.toLowerCase();
         const streams = `${wsSymbol}@trade/${wsSymbol}@kline_${timeframe}`;
-        
-        ws = new WebSocket(`wss://stream.binance.com:9443/stream?streams=${streams}`);
+        // Standard port 443 to help bypass filters
+        ws = new WebSocket(`wss://stream.binance.com/stream?streams=${streams}`);
 
         ws.onopen = () => {
           if (isMounted) setStatus('SECURED: BINANCE INSTITUTIONAL WSS');
@@ -263,10 +351,8 @@ export default function App() {
           try {
             const msg = JSON.parse(event.data);
             if (!msg.data) return;
-            
             const payload = msg.data;
 
-            // Whate Tape Logic
             if (payload.e === 'trade') {
               const price = parseFloat(payload.p) || 0;
               const qty = (parseFloat(payload.q) || 0) * price;
@@ -274,7 +360,7 @@ export default function App() {
               
               if (price > 0) setLivePrice(price);
 
-              if (qty > 50000) { 
+              if (qty > 20000) { 
                 if (isSell) { 
                   volumeRef.current.sessionCVD -= qty;
                   volumeRef.current.instantDelta -= qty;
@@ -285,12 +371,11 @@ export default function App() {
               }
             }
 
-            // Live Tick Appender
             if (payload.e === 'kline') {
               const k = payload.k;
               
               setData(prevData => {
-                if (prevData.length === 0) return prevData; // Wait for REST API to seed first
+                if (prevData.length === 0) return prevData; 
                 
                 const high = parseFloat(k.h) || 0;
                 const low = parseFloat(k.l) || 0;
@@ -326,24 +411,25 @@ export default function App() {
                     cumulativeVolume: currCumVol,
                     cumulativeTypicalPriceVolume: currCumTypVol
                   });
-                  
                   if (newData.length > 150) newData.shift();
                 }
-                
                 return newData;
               });
             }
-          } catch (e) {
-            // Silently catch JSON parse errors from websocket
-          }
+          } catch (e) {}
         };
         
         ws.onerror = () => {
-          if (isMounted) setStatus('ERROR: CONNECTION LOST');
+          // If WSS errors out after opening, don't crash, just log it.
         };
 
-      } catch (err) {
-        if (isMounted) setStatus('ERROR: HISTORY FETCH FAILED');
+      } catch (wssError) {
+        // CANVAS/FIREWALL INTERCEPT TRIGGERED!
+        if (wssError.message && wssError.message.includes('Canvas')) {
+          startPolling();
+        } else {
+          startPolling();
+        }
       }
     };
 
@@ -356,6 +442,7 @@ export default function App() {
     return () => {
       isMounted = false;
       if (ws) ws.close();
+      if (pollTimer) clearInterval(pollTimer);
       if (instantDeltaTimerRef.current) clearInterval(instantDeltaTimerRef.current);
     };
   }, [coin, timeframe]);
@@ -444,14 +531,16 @@ export default function App() {
     const distToSupport = Math.abs(livePrice - safeLowest) / safeLowest;
     const distToResistance = Math.abs(safeHighest - livePrice) / safeHighest;
 
-    const atSupport = distToSupport < 0.005; 
-    const atResistance = distToResistance < 0.005; 
+    // SCALPER SETTINGS: 1.0% Hitbox
+    const atSupport = distToSupport < 0.01; 
+    const atResistance = distToResistance < 0.01; 
 
     if (atSupport) longScore += 2;
     if (atResistance) shortScore += 2;
 
-    const strongBuyDelta = volumeRef.current.instantDelta > 50000;
-    const strongSellDelta = volumeRef.current.instantDelta < -50000;
+    // SCALPER SETTINGS: $20,000 Tape Trigger
+    const strongBuyDelta = volumeRef.current.instantDelta > 20000;
+    const strongSellDelta = volumeRef.current.instantDelta < -20000;
     
     if (atSupport && strongBuyDelta) longScore += 2;
     if (atResistance && strongSellDelta) shortScore += 2;
@@ -644,7 +733,6 @@ export default function App() {
               
               <Tooltip cursor={{stroke: '#334155', strokeWidth: 1, strokeDasharray: '4 4'}} content={renderCustomTooltip} isAnimationActive={false} />
               
-              {/* Removed maxBarSize so the 100 historical candles scale beautifully! */}
               <Bar yAxisId="vol" dataKey="vol" radius={[4, 4, 0, 0]} isAnimationActive={false}>
                 {data.map((entry, index) => (
                   <Cell key={`cell-${index}`} fill={entry.close >= entry.open ? "url(#colorVolBuy)" : "url(#colorVolSell)"} />

@@ -14,12 +14,12 @@ const renderCustomTooltip = ({ active, payload }) => {
         <div className="text-slate-400 mb-2 border-b border-slate-800 pb-1">
           {new Date(data.timestamp || Date.now()).toLocaleTimeString()}
         </div>
-        <div className="flex justify-between gap-6"><span className="text-slate-500">Open:</span> <span>${(data.open || 0).toFixed(2)}</span></div>
-        <div className="flex justify-between gap-6"><span className="text-slate-500">High:</span> <span className="text-emerald-400">${(data.high || 0).toFixed(2)}</span></div>
-        <div className="flex justify-between gap-6"><span className="text-slate-500">Low:</span> <span className="text-rose-400">${(data.low || 0).toFixed(2)}</span></div>
-        <div className="flex justify-between gap-6"><span className="text-slate-500">Close:</span> <span>${(data.close || 0).toFixed(2)}</span></div>
+        <div className="flex justify-between gap-6"><span className="text-slate-500">Open:</span> <span>${(data.open || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span></div>
+        <div className="flex justify-between gap-6"><span className="text-slate-500">High:</span> <span className="text-emerald-400">${(data.high || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span></div>
+        <div className="flex justify-between gap-6"><span className="text-slate-500">Low:</span> <span className="text-rose-400">${(data.low || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span></div>
+        <div className="flex justify-between gap-6"><span className="text-slate-500">Close:</span> <span>${(data.close || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span></div>
         <div className="flex justify-between gap-6 mt-1 pt-1 border-t border-slate-800"><span className="text-slate-500">Vol:</span> <span>{(data.vol || 0).toFixed(2)}</span></div>
-        <div className="flex justify-between gap-6 mt-1"><span className="text-purple-400">VWAP:</span> <span className="text-purple-400">${(data.vwap || 0).toFixed(2)}</span></div>
+        <div className="flex justify-between gap-6 mt-1"><span className="text-purple-400">VWAP:</span> <span className="text-purple-400">${(data.vwap || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span></div>
       </div>
     );
   }
@@ -520,7 +520,7 @@ export default function App() {
           
           <div className="text-left md:text-right flex flex-col items-start md:items-end w-full md:w-auto">
             <div className={`text-4xl lg:text-5xl font-mono font-black tracking-tighter transition-colors ${data[data.length-1].close >= data[data.length-1].open ? 'text-emerald-400 drop-shadow-[0_0_15px_rgba(16,185,129,0.3)]' : 'text-rose-500 drop-shadow-[0_0_15px_rgba(244,63,94,0.3)]'}`}>
-              ${livePrice.toLocaleString('en-US', {minimumFractionDigits: 2})}
+              ${livePrice.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
             </div>
             <div className={`flex items-center gap-2 px-3 py-1 bg-[#09090b] border border-white/5 rounded-full text-[10px] font-bold tracking-widest mt-2 lg:mt-3 uppercase shadow-inner ${status.includes('ERROR') ? 'text-rose-500' : 'text-emerald-400'}`}>
               <RefreshCw size={12} className={status.includes('SECURED') || status.includes('CONNECTING') || status.includes('ROUTING') ? 'animate-spin' : ''} />
@@ -550,7 +550,7 @@ export default function App() {
           )}
 
           <ResponsiveContainer width="100%" height="100%" className="z-10 relative">
-            <ComposedChart data={data} margin={{ top: 20, right: 10, left: 0, bottom: 20 }}>
+            <ComposedChart data={data} margin={{ top: 20, right: 35, left: 0, bottom: 20 }}>
               <defs>
                 <linearGradient id="colorVolBuy" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="#10B981" stopOpacity={0.6}/>
@@ -563,18 +563,28 @@ export default function App() {
               </defs>
 
               <XAxis dataKey="timestamp" hide />
-              <YAxis yAxisId="price" domain={yAxisDomain} allowDataOverflow={true} orientation="right" tick={{fill: '#cbd5e1', fontSize: 11, fontFamily: 'monospace'}} axisLine={false} tickLine={false} />
+              <YAxis 
+                yAxisId="price" 
+                domain={yAxisDomain} 
+                allowDataOverflow={true} 
+                orientation="right" 
+                tick={{fill: '#cbd5e1', fontSize: 11, fontFamily: 'monospace'}} 
+                tickFormatter={(val) => val.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                width={75}
+                axisLine={false} 
+                tickLine={false} 
+              />
               <YAxis yAxisId="vol" domain={[0, maxVol * 4]} hide />
               
               <Tooltip cursor={{stroke: '#334155', strokeWidth: 1, strokeDasharray: '4 4'}} content={renderCustomTooltip} isAnimationActive={false} />
               
-              <Bar yAxisId="vol" dataKey="vol" radius={[4, 4, 0, 0]} isAnimationActive={false}>
+              <Bar yAxisId="vol" dataKey="vol" radius={[4, 4, 0, 0]} isAnimationActive={false} maxBarSize={16}>
                 {data.map((entry, index) => (
                   <Cell key={`cell-${index}`} fill={entry.close >= entry.open ? "url(#colorVolBuy)" : "url(#colorVolSell)"} />
                 ))}
               </Bar>
               
-              <Bar yAxisId="price" dataKey="candleRange" shape={renderCandlestick} isAnimationActive={false} />
+              <Bar yAxisId="price" dataKey="candleRange" shape={renderCandlestick} isAnimationActive={false} maxBarSize={16} />
               
               {showIndicators.vwap && (
                 <Line 
@@ -600,7 +610,7 @@ export default function App() {
                   stroke="#fbbf24" 
                   strokeWidth={2} 
                   strokeDasharray="4 4"
-                  label={{ position: 'insideTopLeft', value: `[ GAMMA WALL: $${optionsData.maxPain.toLocaleString()} ]`, fill: '#fbbf24', fontSize: 11, fontWeight: 'bold' }}
+                  label={{ position: 'insideTopLeft', value: `MAX PAIN: $${optionsData.maxPain.toLocaleString()}`, fill: '#fbbf24', fontSize: 11, fontWeight: 'bold' }}
                 />
               )}
             </ComposedChart>

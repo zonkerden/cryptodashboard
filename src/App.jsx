@@ -600,7 +600,7 @@ export default function App() {
                   stroke="#fbbf24" 
                   strokeWidth={2} 
                   strokeDasharray="4 4"
-                  label={{ position: 'insideTopLeft', value: `MAX PAIN: $${optionsData.maxPain.toLocaleString()}`, fill: '#fbbf24', fontSize: 11, fontWeight: 'bold' }}
+                  label={{ position: 'insideTopLeft', value: `[ GAMMA WALL: $${optionsData.maxPain.toLocaleString()} ]`, fill: '#fbbf24', fontSize: 11, fontWeight: 'bold' }}
                 />
               )}
             </ComposedChart>

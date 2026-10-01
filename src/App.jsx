@@ -58,7 +58,7 @@ const renderCandlestick = (props) => {
 export default function App() {
   const [coin, setCoin] = useState('BTC');
   const [timeframe, setTimeframe] = useState('5m');
-  const [status, setStatus] = useState('CONNECTING WSS...');
+  const [status, setStatus] = useState('SYNCING HISTORY...');
   
   const [data, setData] = useState([]);
   const [livePrice, setLivePrice] = useState(0);
@@ -198,7 +198,7 @@ export default function App() {
     return () => { isMounted = false; clearInterval(int); };
   }, [coin]);
 
-  // 4. WEBSOCKET ENGINE (BINANCE)
+  // 4. WEBSOCKET ENGINE (BINANCE) + HISTORICAL REST SEEDING
   useEffect(() => {
     let isMounted = true;
     let ws = null;
@@ -207,106 +207,147 @@ export default function App() {
     volumeRef.current = { sessionCVD: 0, instantDelta: 0 };
     if (instantDeltaTimerRef.current) clearInterval(instantDeltaTimerRef.current);
 
-    setStatus('CONNECTING WSS...');
-
-    const symbol = `${coin}USDT`.toLowerCase();
-    const streams = `${symbol}@trade/${symbol}@kline_${timeframe}`;
-    
-    ws = new WebSocket(`wss://stream.binance.com:9443/stream?streams=${streams}`);
-
-    ws.onopen = () => {
-      if (isMounted) setStatus('SECURED: BINANCE INSTITUTIONAL WSS');
-    };
-
-    ws.onmessage = (event) => {
-      if (!isMounted) return;
+    const initializeDataAndSocket = async () => {
       try {
-        const msg = JSON.parse(event.data);
-        if (!msg.data) return;
+        if (isMounted) setStatus('SYNCING HISTORY...');
         
-        const payload = msg.data;
+        // 1. Seed the chart with the last 100 historical candles for beautiful proportions
+        const fetchSymbol = `${coin}USDT`;
+        const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${fetchSymbol}&interval=${timeframe}&limit=100`);
+        const klines = await res.json();
+        
+        if (!isMounted) return;
 
-        if (payload.e === 'trade') {
-          const price = parseFloat(payload.p) || 0;
-          const qty = (parseFloat(payload.q) || 0) * price;
-          const isSell = payload.m; 
-          
-          if (price > 0) setLivePrice(price);
+        let cumVol = 0;
+        let cumTypVol = 0;
+        
+        const historicalData = klines.map(k => {
+            const timestamp = parseInt(k[0]);
+            const open = parseFloat(k[1]);
+            const high = parseFloat(k[2]);
+            const low = parseFloat(k[3]);
+            const close = parseFloat(k[4]);
+            const vol = parseFloat(k[5]);
+            const typ = (high + low + close) / 3;
 
-          if (qty > 50000) { 
-            if (isSell) { 
-              volumeRef.current.sessionCVD -= qty;
-              volumeRef.current.instantDelta -= qty;
-            } else { 
-              volumeRef.current.sessionCVD += qty;
-              volumeRef.current.instantDelta += qty;
-            }
-          }
+            cumVol += vol;
+            cumTypVol += (typ * vol);
+
+            return {
+                timestamp, open, high, low, close, vol,
+                candleRange: [low, high],
+                vwap: cumVol > 0 ? (cumTypVol / cumVol) : close,
+                cumulativeVolume: cumVol,
+                cumulativeTypicalPriceVolume: cumTypVol
+            };
+        });
+
+        setData(historicalData);
+        if (historicalData.length > 0) {
+            setLivePrice(historicalData[historicalData.length - 1].close);
         }
 
-        if (payload.e === 'kline') {
-          const k = payload.k;
-          
-          setData(prevData => {
-            const high = parseFloat(k.h) || 0;
-            const low = parseFloat(k.l) || 0;
-            const close = parseFloat(k.c) || 0;
-            const open = parseFloat(k.o) || 0;
-            const vol = parseFloat(k.v) || 0;
-            const typ = (high + low + close) / 3;
-            const timestamp = parseInt(k.t);
+        // 2. Hand off cleanly to Live WebSocket
+        if (isMounted) setStatus('CONNECTING WSS...');
+        const wsSymbol = fetchSymbol.toLowerCase();
+        const streams = `${wsSymbol}@trade/${wsSymbol}@kline_${timeframe}`;
+        
+        ws = new WebSocket(`wss://stream.binance.com:9443/stream?streams=${streams}`);
 
-            if (prevData.length === 0) {
-                return [{
+        ws.onopen = () => {
+          if (isMounted) setStatus('SECURED: BINANCE INSTITUTIONAL WSS');
+        };
+
+        ws.onmessage = (event) => {
+          if (!isMounted) return;
+          try {
+            const msg = JSON.parse(event.data);
+            if (!msg.data) return;
+            
+            const payload = msg.data;
+
+            // Whate Tape Logic
+            if (payload.e === 'trade') {
+              const price = parseFloat(payload.p) || 0;
+              const qty = (parseFloat(payload.q) || 0) * price;
+              const isSell = payload.m; 
+              
+              if (price > 0) setLivePrice(price);
+
+              if (qty > 50000) { 
+                if (isSell) { 
+                  volumeRef.current.sessionCVD -= qty;
+                  volumeRef.current.instantDelta -= qty;
+                } else { 
+                  volumeRef.current.sessionCVD += qty;
+                  volumeRef.current.instantDelta += qty;
+                }
+              }
+            }
+
+            // Live Tick Appender
+            if (payload.e === 'kline') {
+              const k = payload.k;
+              
+              setData(prevData => {
+                if (prevData.length === 0) return prevData; // Wait for REST API to seed first
+                
+                const high = parseFloat(k.h) || 0;
+                const low = parseFloat(k.l) || 0;
+                const close = parseFloat(k.c) || 0;
+                const open = parseFloat(k.o) || 0;
+                const vol = parseFloat(k.v) || 0;
+                const typ = (high + low + close) / 3;
+                const timestamp = parseInt(k.t);
+                
+                const newData = [...prevData];
+                const last = newData[newData.length - 1];
+                
+                if (timestamp === last.timestamp) {
+                  const prevCandle = newData.length > 1 ? newData[newData.length - 2] : null;
+                  let currCumVol = prevCandle ? prevCandle.cumulativeVolume + vol : vol;
+                  let currCumTypVol = prevCandle ? prevCandle.cumulativeTypicalPriceVolume + (typ * vol) : (typ * vol);
+                  
+                  newData[newData.length - 1] = {
                     timestamp, open, high, low, close, vol,
                     candleRange: [low, high],
-                    vwap: close,
-                    cumulativeVolume: vol,
-                    cumulativeTypicalPriceVolume: (typ * vol)
-                }];
-            }
-            
-            const newData = [...prevData];
-            const last = newData[newData.length - 1];
-            
-            if (timestamp === last.timestamp) {
-              const prevCandle = newData.length > 1 ? newData[newData.length - 2] : null;
-              let cumVol = prevCandle ? prevCandle.cumulativeVolume + vol : vol;
-              let cumTypVol = prevCandle ? prevCandle.cumulativeTypicalPriceVolume + (typ * vol) : (typ * vol);
-              
-              newData[newData.length - 1] = {
-                timestamp, open, high, low, close, vol,
-                candleRange: [low, high],
-                vwap: cumVol > 0 ? (cumTypVol / cumVol) : close,
-                cumulativeVolume: cumVol,
-                cumulativeTypicalPriceVolume: cumTypVol
-              };
-            } else if (timestamp > last.timestamp) {
-              const cumVol = last.cumulativeVolume + vol;
-              const cumTypVol = last.cumulativeTypicalPriceVolume + (typ * vol);
-              
-              newData.push({
-                timestamp, open, high, low, close, vol,
-                candleRange: [low, high],
-                vwap: cumVol > 0 ? (cumTypVol / cumVol) : close,
-                cumulativeVolume: cumVol,
-                cumulativeTypicalPriceVolume: cumTypVol
+                    vwap: currCumVol > 0 ? (currCumTypVol / currCumVol) : close,
+                    cumulativeVolume: currCumVol,
+                    cumulativeTypicalPriceVolume: currCumTypVol
+                  };
+                } else if (timestamp > last.timestamp) {
+                  const currCumVol = last.cumulativeVolume + vol;
+                  const currCumTypVol = last.cumulativeTypicalPriceVolume + (typ * vol);
+                  
+                  newData.push({
+                    timestamp, open, high, low, close, vol,
+                    candleRange: [low, high],
+                    vwap: currCumVol > 0 ? (currCumTypVol / currCumVol) : close,
+                    cumulativeVolume: currCumVol,
+                    cumulativeTypicalPriceVolume: currCumTypVol
+                  });
+                  
+                  if (newData.length > 150) newData.shift();
+                }
+                
+                return newData;
               });
-              
-              if (newData.length > 100) newData.shift();
             }
-            
-            return newData;
-          });
-        }
-      } catch (e) {
-        // Safe catch
+          } catch (e) {
+            // Silently catch JSON parse errors from websocket
+          }
+        };
+        
+        ws.onerror = () => {
+          if (isMounted) setStatus('ERROR: CONNECTION LOST');
+        };
+
+      } catch (err) {
+        if (isMounted) setStatus('ERROR: HISTORY FETCH FAILED');
       }
     };
-    
-    ws.onerror = () => {
-      if (isMounted) setStatus('ERROR: CONNECTION LOST');
-    };
+
+    initializeDataAndSocket();
 
     instantDeltaTimerRef.current = setInterval(() => {
       volumeRef.current.instantDelta = 0;
@@ -360,6 +401,31 @@ export default function App() {
     const buffer = (highest - lowest) * 0.15; 
     return [lowest - buffer, highest + buffer];
   }, [highest, lowest]);
+
+  const maxPainLabelConfig = useMemo(() => {
+    if (!yAxisDomain || yAxisDomain.length < 2) return null;
+    const [min, max] = yAxisDomain;
+    const range = max - min;
+    const mp = optionsData.maxPain || 0;
+    
+    if (mp > max) {
+        return { position: 'insideBottomLeft', value: `[ GAMMA WALL: $${mp.toLocaleString()} ↗ ]`, fill: '#fbbf24', fontSize: 11, fontWeight: 'bold' };
+    } 
+    else if (mp < min) {
+        return { position: 'insideTopLeft', value: `[ GAMMA WALL: $${mp.toLocaleString()} ↘ ]`, fill: '#fbbf24', fontSize: 11, fontWeight: 'bold' };
+    }
+    return { position: 'insideTopLeft', value: `[ MAX PAIN: $${mp.toLocaleString()} ]`, fill: '#fbbf24', fontSize: 11, fontWeight: 'bold' };
+  }, [optionsData.maxPain, yAxisDomain]);
+
+  const maxPainY = useMemo(() => {
+    if (!yAxisDomain || yAxisDomain.length < 2) return 0;
+    const [min, max] = yAxisDomain;
+    const range = max - min;
+    const mp = optionsData.maxPain || 0;
+    if (mp > max) return max - (range * 0.02);
+    if (mp < min) return min + (range * 0.02);
+    return mp;
+  }, [optionsData.maxPain, yAxisDomain]);
 
   const maxVol = useMemo(() => {
     if (data.length === 0) return 0;
@@ -578,13 +644,14 @@ export default function App() {
               
               <Tooltip cursor={{stroke: '#334155', strokeWidth: 1, strokeDasharray: '4 4'}} content={renderCustomTooltip} isAnimationActive={false} />
               
-              <Bar yAxisId="vol" dataKey="vol" radius={[4, 4, 0, 0]} isAnimationActive={false} maxBarSize={16}>
+              {/* Removed maxBarSize so the 100 historical candles scale beautifully! */}
+              <Bar yAxisId="vol" dataKey="vol" radius={[4, 4, 0, 0]} isAnimationActive={false}>
                 {data.map((entry, index) => (
                   <Cell key={`cell-${index}`} fill={entry.close >= entry.open ? "url(#colorVolBuy)" : "url(#colorVolSell)"} />
                 ))}
               </Bar>
               
-              <Bar yAxisId="price" dataKey="candleRange" shape={renderCandlestick} isAnimationActive={false} maxBarSize={16} />
+              <Bar yAxisId="price" dataKey="candleRange" shape={renderCandlestick} isAnimationActive={false} />
               
               {showIndicators.vwap && (
                 <Line 
@@ -606,11 +673,11 @@ export default function App() {
               {showIndicators.maxPain && optionsData.maxPain > 0 && (
                 <ReferenceLine 
                   yAxisId="price" 
-                  y={optionsData.maxPain} 
+                  y={maxPainY} 
                   stroke="#fbbf24" 
                   strokeWidth={2} 
                   strokeDasharray="4 4"
-                  label={{ position: 'insideTopLeft', value: `MAX PAIN: $${optionsData.maxPain.toLocaleString()}`, fill: '#fbbf24', fontSize: 11, fontWeight: 'bold' }}
+                  label={maxPainLabelConfig}
                 />
               )}
             </ComposedChart>
